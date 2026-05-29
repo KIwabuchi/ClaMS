@@ -1,0 +1,18 @@
+name: CI Test
+
+on: [ push, pull_request ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - &checkout
+        uses: actions/checkout@v4
+      - &install_openmpi
+        name: Install OpenMPI
+        run: sudo apt-get install openmpi-bin libopenmpi-dev
+      - name: Build
+        run: |
+          mkdir build && cd build
+          cmake ../ -DCMAKE_BUILD_TYPE=DEBUG -DCMAKE_CXX_COMPILER=g++-12
+          make -j4

@@ -29,10 +29,9 @@ int main(int argc, char **argv) {
   };
 
   for (const auto &edge : edges) {
-    if (clams::dnnd_t::get_owner(edge.first, world.size()) ==
+    if (clams::dist_pm_knng_t::get_owner(edge.first, world.size()) ==
         world.rank()) {
-      knng.insert(edge.first,
-                  clams::pm_knng_t::neighbor_type(edge.second, 1.0f));
+      knng[edge.first].emplace_back(edge.second, 1.0f);
     }
   }
   world.cf_barrier();
@@ -52,7 +51,7 @@ int main(int argc, char **argv) {
     };
 
     for (pid_t pid = 0; pid < 10; ++pid) {
-      if (clams::dnnd_t::get_owner(pid, world.size()) == world.rank()) {
+      if (clams::dist_pm_knng_t::get_owner(pid, world.size()) == world.rank()) {
         if (pid <= 2) {
           result_checker(pid, 0);  // Component 1
         } else if (pid <= 5) {

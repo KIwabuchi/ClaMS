@@ -24,10 +24,11 @@ namespace cls = clams;
 
 void show_usage(const char *prog_name) {
   std::cout << "Usage: " << prog_name
-            << " -d <dnnd_datastore_path> -f <distance_name> [-b "
+            << " -d <pm_knng_datastore_path> -f <distance_name> [-b "
                "<bridge_edge_dump_file>]"
             << std::endl;
-  std::cout << "  -d <path>: Path to the DNND Metall datastore." << std::endl;
+  std::cout << "  -d <path>: Path to the distributed PM kNNG datastore."
+            << std::endl;
   std::cout << "  -f <string>: Distance function name (e.g., l2, cosine)."
             << std::endl;
   std::cout << "  -b <path>: (Optional) File to dump the bridge edges."
@@ -35,17 +36,17 @@ void show_usage(const char *prog_name) {
 }
 
 bool parse_option(int argc, char *argv[],
-                  std::filesystem::path &dnnd_datastore_path,
+                  std::filesystem::path &pm_knng_datastore_path,
                   std::string &distance_name,
                   std::string &bridge_edge_dump_file) {
   int opt;
-  dnnd_datastore_path.clear();
+  pm_knng_datastore_path.clear();
   distance_name.clear();
 
   while ((opt = getopt(argc, argv, "d:f:b:")) != -1) {
     switch (opt) {
       case 'd':
-        dnnd_datastore_path = std::filesystem::path(optarg);
+        pm_knng_datastore_path = std::filesystem::path(optarg);
         break;
       case 'f':
         distance_name = optarg;
@@ -58,12 +59,12 @@ bool parse_option(int argc, char *argv[],
     }
   }
 
-  if (dnnd_datastore_path.empty()) {
+  if (pm_knng_datastore_path.empty()) {
     std::cerr << "Datastore path is required (-d)." << std::endl;
     return false;
   }
-  if (!std::filesystem::exists(dnnd_datastore_path)) {
-    std::cerr << "Datastore does not exist: " << dnnd_datastore_path
+  if (!std::filesystem::exists(pm_knng_datastore_path)) {
+    std::cerr << "Datastore does not exist: " << pm_knng_datastore_path
               << std::endl;
     return false;
   }
@@ -78,10 +79,10 @@ bool parse_option(int argc, char *argv[],
 int main(int argc, char **argv) {
   ygm::comm comm(&argc, &argv);
 
-  std::filesystem::path dnnd_datastore_path;
+  std::filesystem::path pm_knng_datastore_path;
   std::string distance_name;
   std::string bridge_edge_dump_file;
-  const bool opt_parse_ret = parse_option(argc, argv, dnnd_datastore_path,
+  const bool opt_parse_ret = parse_option(argc, argv, pm_knng_datastore_path,
                                           distance_name, bridge_edge_dump_file);
   if (!opt_parse_ret) {
     if (comm.rank0()) {
@@ -90,16 +91,16 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  comm.cout0() << "DNND datastore path\t" << dnnd_datastore_path << std::endl;
+  comm.cout0() << "PM datastore path\t" << pm_knng_datastore_path << std::endl;
   comm.cout0() << "Distance name\t" << distance_name << std::endl;
 
   ygm::utility::timer root_timer;
   {
-    cls::dnnd_t dnnd(saltatlas::open_only, dnnd_datastore_path, comm);
+    cls::dist_pm_knng_t pm_knng(comm.get_mpi_comm());
+    pm_knng.open(pm_knng_datastore_path);
 
-    // TODO: get_index() only returns const index
-    static auto &knng = const_cast<cls::pm_knng_t &>(
-        dnnd.get_index(dnnd.get_index_ids().front()));
+    static auto &knng   = pm_knng.get_knng();
+    static auto &pstore = pm_knng.get_point_store();
 
     ygm::utility::timer cc_timer;
     dist_cc cc(comm, knng);
@@ -129,7 +130,7 @@ int main(int argc, char **argv) {
             distance_name);
     static std::vector<std::tuple<cls::id_t, cls::id_t, cls::distance_t>>
         local_bridge_edges;
-    static const auto &ref_dnnd = dnnd;
+    static const auto &ref_pstore = pstore;
     for (const auto &cc : cc_size_table) {
       const auto &pid = cc.first;
       if (pid == largest_cc_id) {
@@ -137,19 +138,25 @@ int main(int argc, char **argv) {
       }
 
       comm.async(
-          cls::dnnd_t::get_owner(largest_cc_id, comm.size()),
+          cls::dist_pm_knng_t::get_owner(largest_cc_id, comm.size()),
           [](auto *c, const cls::id_t &large, const cls::id_t &small) {
             c->async(
-                cls::dnnd_t::get_owner(small, c->size()),
+                cls::dist_pm_knng_t::get_owner(small, c->size()),
                 [](const cls::id_t &large, const cls::id_t &small,
                    const auto &large_fv) {
-                  const auto &small_fv = ref_dnnd.get_local_point(small);
+                  const auto point_itr = ref_pstore.find(small);
+                  if (point_itr == ref_pstore.end()) {
+                    std::cerr << "Cannot find point for ID: " << small
+                              << std::endl;
+                    std::abort();
+                  }
+                  const auto &small_fv = point_itr->second;
                   const auto d = ref_distance_func(large_fv, small_fv);
-                  knng.insert(small, cls::neighbor_t(large, d));
+                  knng[small].emplace_back(large, d);
                   // Store the bridge edge
                   local_bridge_edges.emplace_back(large, small, d);
                 },
-                large, small, ref_dnnd.get_local_point(large));
+                large, small, ref_pstore.at(large));
           },
           largest_cc_id, pid);
     }

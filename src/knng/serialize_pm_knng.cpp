@@ -55,16 +55,41 @@ void parse_option(int argc, char *argv[], std::filesystem::path &pm_knng_path,
 }
 
 int main(int argc, char *argv[]) {
-
   ygm::comm comm(&argc, &argv);
 
   std::filesystem::path pm_knng_path;
   std::filesystem::path output_path;
   parse_option(argc, argv, pm_knng_path, output_path);
 
-  dnnd_t dnnd(saltatlas::open_read_only, pm_knng_path, comm);
-  const auto knng_id= dnnd.get_index_ids().front();
-  dnnd.dump_graph(knng_id, output_path, true);
+  dist_pm_knng_t pm_knng(comm.get_mpi_comm());
+  pm_knng.open_read_only(pm_knng_path);
+  const auto &knng = pm_knng.get_knng();
+
+  std::filesystem::create_directories(output_path);
+  const auto local_output_file =
+      output_path / ("knng-" + std::to_string(comm.rank()) + ".txt");
+
+  std::ofstream ofs(local_output_file);
+  if (!ofs) {
+    std::cerr << "Failed to open output file: " << local_output_file
+              << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  for (const auto &[source, neighbors] : knng) {
+    ofs << source;
+    for (const auto &neighbor : neighbors) {
+      ofs << " " << neighbor.id;
+    }
+    ofs << "\n";
+
+    ofs << "0.0";
+    for (const auto &neighbor : neighbors) {
+      ofs << " " << neighbor.distance;
+    }
+    ofs << "\n";
+  }
+
   comm.cf_barrier();
   comm.cout0("Finished dumping KNNG to: ", output_path.string());
 

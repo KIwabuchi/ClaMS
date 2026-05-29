@@ -9,7 +9,6 @@
 #include <string_view>
 #include <vector>
 
-#include <saltatlas/dnnd/utility.hpp>
 #include <ygm/comm.hpp>
 
 #include "../common.hpp"
@@ -17,15 +16,17 @@
 namespace clams {
 
 struct option_t {
-  int                                index_k{20};
-  double                             r{0.5};
-  double                             delta{0.001};
-  std::string                        distance_name;
+  int         index_k{20};
+  double      r{0.5};
+  double      replicate_rate{0.0};  // Used for NEO-DNND only
+  double      delta{0.0001};
+  std::string distance_name;
   std::vector<std::filesystem::path> point_file_names;
   std::filesystem::path              scratchpath{"/dev/shm/dnnd_datastore"};
   std::filesystem::path              datastorepath{};
   std::string                        point_file_format;
-  std::size_t                        batch_size{1ULL << 25};
+  std::size_t                        batch_size{1ULL << 23};
+  int                                num_threads{-1};  // For NEO-DNND
   bool                               verbose{false};
 };
 
@@ -36,7 +37,7 @@ inline bool parse_options(int argc, char **argv, option_t &opt, bool &help) {
   help = false;
 
   int n;
-  while ((n = ::getopt(argc, argv, "k:r:d:f:p:s:o:b:vh")) != -1) {
+  while ((n = ::getopt(argc, argv, "k:r:R:d:f:p:s:o:b:T:vh")) != -1) {
     switch (n) {
       case 'k':
         opt.index_k = std::stoi(optarg);
@@ -44,6 +45,10 @@ inline bool parse_options(int argc, char **argv, option_t &opt, bool &help) {
 
       case 'r':
         opt.r = std::stod(optarg);
+        break;
+
+      case 'R':
+        opt.replicate_rate = std::stod(optarg);
         break;
 
       case 'd':
@@ -70,6 +75,10 @@ inline bool parse_options(int argc, char **argv, option_t &opt, bool &help) {
         opt.batch_size = std::stoul(optarg);
         break;
 
+      case 'T':
+        opt.num_threads = std::stoi(optarg);
+        break;
+
       case 'v':
         opt.verbose = true;
         break;
@@ -88,6 +97,10 @@ inline bool parse_options(int argc, char **argv, option_t &opt, bool &help) {
   }
 
   if (opt.index_k <= 0) {
+    return false;
+  }
+
+  if (opt.replicate_rate < 0.0 || opt.replicate_rate > 1.0) {
     return false;
   }
 
@@ -112,6 +125,8 @@ inline void usage(std::string_view exe_name, cout_type &cout) {
           "csv-id, str, and str-id are supported"
        << std::endl;
   cout << "  -r <float>  NN-Descent r parameter (default: 0.5)" << std::endl;
+  cout << "  -R <float>  Replication rate in [0, 1] (default: 0.0)"
+       << std::endl;
   cout << "  -d <float>  NN-Descent delta parameter (default: 0.001)"
        << std::endl;
   cout << "  -o <path>   If specified, copy the PM datastore from the "
@@ -121,7 +136,9 @@ inline void usage(std::string_view exe_name, cout_type &cout) {
           "during computation (default: /dev/shm/dnnd_datastore). Recommended "
           "to be on a fast storage, e.g., tmpfs (/dev/shm)."
        << std::endl;
-  cout << "  -b <int>    Batch size (default: 1^25)" << std::endl;
+  cout << "  -b <int>    Batch size (default: 1^23)" << std::endl;
+  cout << "  -T <int>    Number of threads for NEO-DNND (optional)"
+       << std::endl;
   cout << "  -v          Verbose mode" << std::endl;
   cout << "  -h          Show this message" << std::endl;
 }
@@ -131,6 +148,7 @@ inline void show_options(const option_t &opt, cout_type &cout) {
   cout << "Options:" << std::endl;
   cout << "  k: " << opt.index_k << std::endl;
   cout << "  r: " << opt.r << std::endl;
+  cout << "  replicate rate: " << opt.replicate_rate << std::endl;
   cout << "  delta: " << opt.delta << std::endl;
   cout << "  distance name: " << opt.distance_name << std::endl;
   cout << "  point file format: " << opt.point_file_format << std::endl;

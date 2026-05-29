@@ -52,6 +52,8 @@ def parse_options():
     parser.add_argument('-k', '--nng_k', type=int, default=50,
                         help='#of neighbors to have when constructing'
                              'a KNNG value.')
+    parser.add_argument('--neodnnd', action='store_true',
+                        help='Use NEO-DNND (build_knng_neo) instead of build_knng.')
 
     parser.add_argument('-G', '--input_dnnd_ds_path',
                         default='',
@@ -267,6 +269,15 @@ def main():
     work_dir = os.path.abspath(opts.work_dir + '/' + job_name)
     print(f"Work directory: {work_dir}")
 
+    # Select kNNG builder executable.
+    # If --neodnnd is specified and the user did not override --dnnd_exe,
+    # switch the default to build_knng_neo.
+    dnnd_exe = opts.dnnd_exe
+    if opts.neodnnd:
+        default_dnnd_exe = f'{os.getcwd()}/src/knng/build_knng'
+        if dnnd_exe == default_dnnd_exe:
+            dnnd_exe = f'{os.getcwd()}/src/knng/build_knng_neo'
+
     if opts.ygm_cluster_eval:
         evaluator = opts.ygm_evaluator_exe
     else:
@@ -280,7 +291,7 @@ def main():
     job_script = gen_clams_bench_script(job_name, job_dir, work_dir,
                                                opts.num_nodes,
                                                opts.num_tasks_per_node,
-                                               opts.dnnd_exe, opts.nng_k,
+                                               dnnd_exe, opts.nng_k,
                                                opts.distance_func,
                                                opts.points_file_format,
                                                opts.point_path,

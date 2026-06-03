@@ -63,8 +63,8 @@ find_package(MPI)
 #
 # Boost
 set(BOOST_SOURCE_DIR CACHE STRING "Path to Boost libraries directory already uncompressed. Must be a version that supports CMake.")
-set(BOOST_FETCH_URL 
-    "https://github.com/boostorg/boost/releases/download/boost-1.88.0/boost-1.88.0-cmake.tar.gz" 
+set(BOOST_FETCH_URL
+    "https://github.com/boostorg/boost/releases/download/boost-1.88.0/boost-1.88.0-cmake.tar.gz"
     CACHE STRING "URL or file path to an archived Boost source. Must be a version that supports CMake.")
 
 # Link Boost UUID with libatomic fails on LC machines
@@ -273,3 +273,4 @@ endfunction()
 
 add_subdirectory(src)
 add_subdirectory(test)
+add_subdirectory(script)

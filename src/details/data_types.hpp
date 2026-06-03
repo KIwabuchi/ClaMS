@@ -1,7 +1,6 @@
 // Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
 // Project Developers. See the top-level COPYRIGHT file for details.
 
-
 #pragma once
 
 #include <cstddef>
@@ -12,6 +11,7 @@
 // CLAMS_USE_SALTATLAS is defined in cpp files
 #ifdef CLAMS_USE_SALTATLAS
 #include <saltatlas/dnnd/dnnd_adv.hpp>
+#include "dist_pm_knng.hpp"
 #endif
 
 #include "edge_list.hpp"
@@ -33,9 +33,11 @@ using weighted_edge_t = weighted_edge_list_t::value_type;
 #ifdef CLAMS_USE_SALTATLAS
 using dnnd_t =
     saltatlas::dnnd_adv<id_t, saltatlas::pm_feature_vector<fe_t>, distance_t>;
-// KNNG type supports Metall.
-using pm_knng_t = typename dnnd_t::knn_index_type;
-using neighbor_t = typename dnnd_t::neighbor_type;
-using point_t = typename dnnd_t::point_type;
+
+using dist_pm_knng_t =
+    dist_pm_knng<id_t, saltatlas::pm_feature_vector<fe_t>, distance_t>;
+using pm_knng_t  = typename dist_pm_knng_t::knng_type;
+using neighbor_t = typename dist_pm_knng_t::neighbor_type;
+using point_t    = typename dist_pm_knng_t::point_type;
 #endif
 }  // namespace clams

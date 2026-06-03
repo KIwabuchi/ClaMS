@@ -34,7 +34,7 @@ void usage(ygm::comm &comm) {
               << "./build_amst -i <input_file> Input text file(s) containing "
                  "approximate nearest-neighbor graph"
               << std::endl
-              << "  -d <pm_input_path> PM datastore path for DNND data"
+              << "  -d <pm_input_path> PM datastore path for distributed kNNG"
               << std::endl
               << "  -p <pm_output_path> PM datastore path for MST edges"
               << std::endl
@@ -158,25 +158,27 @@ std::vector<edge_t> read_dnnd_output(const std::vector<std::string> &filenames,
   return to_return;
 }
 
-std::vector<edge_t> read_dnnd_output_pm(std::string &dstore_path,
+std::vector<edge_t> read_pm_knng_output(std::string &dstore_path,
                                         ygm::comm &comm) {
-  comm.cout0() << "Reading PM DNND data from: " << dstore_path << std::endl;
+  comm.cout0() << "Reading distributed PM kNNG data from: " << dstore_path
+               << std::endl;
 
-  cls::dnnd_t dnnd(saltatlas::open_read_only, dstore_path, comm);
-  const auto &knng = dnnd.get_index(dnnd.get_index_ids().front());
+  cls::dist_pm_knng_t pm_knng(comm.get_mpi_comm());
+  pm_knng.open_read_only(dstore_path);
+  const auto &knng = pm_knng.get_knng();
 
   std::vector<edge_t> to_return;
-  to_return.reserve(knng.count_all_neighbors());
+  std::size_t local_num_neighbors = 0;
+  for (const auto &[source, neighbors] : knng) {
+    (void)source;
+    local_num_neighbors += neighbors.size();
+  }
+  to_return.reserve(local_num_neighbors);
 
-  for (auto pitr = knng.points_begin(), pend = knng.points_end(); pitr != pend;
-       ++pitr) {
-    const auto &source = pitr->first;
-    for (auto nitr = knng.neighbors_begin(source),
-              nend = knng.neighbors_end(source);
-         nitr != nend; ++nitr) {
-      const auto &neighbor = *nitr;
+  for (const auto &[source, neighbors] : knng) {
+    for (const auto &neighbor : neighbors) {
       if (neighbor.distance < 0.0) {
-        comm.cerr0("Negative distance found in DNND kNNG: ", neighbor);
+        comm.cerr0("Negative distance found in distributed kNNG: ", neighbor);
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
       }
       to_return.push_back(
@@ -394,7 +396,7 @@ int main(int argc, char **argv) {
   ygm::utility::timer read_timer;
   auto edges = (txt_input_filenames.size() > 0)
                    ? read_dnnd_output(txt_input_filenames, world)
-                   : read_dnnd_output_pm(pm_input_path, world);
+                   : read_pm_knng_output(pm_input_path, world);
   world.cout0("Edge reading time (s): ", read_timer.elapsed());
 
   auto amst_edges = approx_mst(edges, amst_approx_bound, world);

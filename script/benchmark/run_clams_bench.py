@@ -114,7 +114,7 @@ def parse_options():
                         default=f'{cwd}/src/knng/build_knng',
                         help='Path to the DNND executable.')
     parser.add_argument('-M', '--mfc_exe',
-                        default=f'{cwd}/src/mfc/connect_ccs_random_dist',
+                        default=f'{cwd}/src/mfc/connect_mfc',
                         help='Path to the MFC executable.')
     parser.add_argument('-A', '--amst_exe',
                         default=f'{cwd}/src/mst/build_amst',

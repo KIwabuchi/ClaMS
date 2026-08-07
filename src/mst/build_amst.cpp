@@ -15,15 +15,15 @@
 #include <string>
 #include <vector>
 
-#include <metall/utility/metall_mpi_adaptor.hpp>
 #include <metall/metall.hpp>
+#include <metall/utility/metall_mpi_adaptor.hpp>
 
-#include "approx_mst_builder.hpp"
 #include "../common.hpp"
+#include "approx_mst_builder.hpp"
 
 namespace cls = clams;
 
-using id_t = cls::id_t;
+using id_t       = cls::id_t;
 using distance_t = cls::distance_t;
 
 using edge_t = std::tuple<id_t, id_t, distance_t>;
@@ -45,8 +45,8 @@ void usage(ygm::comm &comm) {
 
 void parse_cmd_line(int argc, char **argv, ygm::comm &comm, float &approx_bound,
                     std::vector<std::string> &txt_input_filenames,
-                    std::string &pm_input_path,
-                    std::string &pm_output_filename) {
+                    std::string              &pm_input_path,
+                    std::string              &pm_output_filename) {
   if (comm.rank0()) {
     std::cout << "CMD line:";
     for (int i = 0; i < argc; ++i) {
@@ -55,9 +55,9 @@ void parse_cmd_line(int argc, char **argv, ygm::comm &comm, float &approx_bound,
     std::cout << std::endl;
   }
 
-  int c;
+  int  c;
   bool inserting_input_filenames = false;
-  bool prn_help = false;
+  bool prn_help                  = false;
   while (true) {
     while ((c = getopt(argc, argv, "+e:i:d:p:h ")) != -1) {
       inserting_input_filenames = false;
@@ -113,7 +113,7 @@ void parse_cmd_line(int argc, char **argv, ygm::comm &comm, float &approx_bound,
 }
 
 std::vector<edge_t> read_dnnd_output(const std::vector<std::string> &filenames,
-                                     ygm::comm &c) {
+                                     ygm::comm                      &c) {
   std::vector<edge_t> to_return;
 
   ygm::container::bag<std::string> filenames_bag(c);
@@ -138,8 +138,8 @@ std::vector<edge_t> read_dnnd_output(const std::vector<std::string> &filenames,
       std::stringstream neighbors_ss(neighbors_str);
       std::stringstream distances_ss(distances_str);
 
-      id_t src;
-      id_t ngbr;
+      id_t       src;
+      id_t       ngbr;
       distance_t dist;
 
       neighbors_ss >> src;
@@ -159,7 +159,7 @@ std::vector<edge_t> read_dnnd_output(const std::vector<std::string> &filenames,
 }
 
 std::vector<edge_t> read_pm_knng_output(std::string &dstore_path,
-                                        ygm::comm &comm) {
+                                        ygm::comm   &comm) {
   comm.cout0() << "Reading distributed PM kNNG data from: " << dstore_path
                << std::endl;
 
@@ -168,7 +168,7 @@ std::vector<edge_t> read_pm_knng_output(std::string &dstore_path,
   const auto &knng = pm_knng.get_knng();
 
   std::vector<edge_t> to_return;
-  std::size_t local_num_neighbors = 0;
+  std::size_t         local_num_neighbors = 0;
   for (const auto &[source, neighbors] : knng) {
     (void)source;
     local_num_neighbors += neighbors.size();
@@ -229,7 +229,7 @@ void pivot_sort(std::vector<edge_t> &in_vec, ygm::comm &world) {
     return a.second < b.second;
   };
 
-  const size_t samples_per_pivot = 40;
+  const size_t        samples_per_pivot = 40;
   std::vector<edge_t> to_sort;
   to_sort.reserve(in_vec.size() * 1.1f);
 
@@ -238,14 +238,14 @@ void pivot_sort(std::vector<edge_t> &in_vec, ygm::comm &world) {
   //  of duplicate items
   std::vector<std::pair<edge_t, size_t>> samples;
   std::vector<std::pair<edge_t, size_t>> pivots;
-  static auto &s_samples = samples;
-  static auto &s_to_sort = to_sort;
+  static auto                           &s_samples = samples;
+  static auto                           &s_to_sort = to_sort;
   samples.reserve(world.size() * samples_per_pivot);
 
   //
   std::default_random_engine rng;
 
-  size_t my_prefix = ygm::prefix_sum(in_vec.size(), world);
+  size_t my_prefix   = ygm::prefix_sum(in_vec.size(), world);
   size_t global_size = ygm::sum(in_vec.size(), world);
   std::uniform_int_distribution<size_t> uintdist{0, global_size - 1};
 
@@ -275,9 +275,9 @@ void pivot_sort(std::vector<edge_t> &in_vec, ygm::comm &world) {
   //
   // Partition using pivots
   for (size_t i = 0; i < in_vec.size(); ++i) {
-    auto itr = std::lower_bound(pivots.begin(), pivots.end(),
-                                std::make_pair(in_vec[i], my_prefix + i),
-                                edge_index_pair_comp_lambda);
+    auto   itr   = std::lower_bound(pivots.begin(), pivots.end(),
+                                    std::make_pair(in_vec[i], my_prefix + i),
+                                    edge_index_pair_comp_lambda);
     size_t owner = std::distance(pivots.begin(), itr);
 
     world.async(
@@ -319,7 +319,7 @@ void pivot_sort(std::vector<edge_t> &in_vec, ygm::comm &world) {
   in_vec.swap(to_sort);
 }
 
-void write_output_single_file(const std::string &output_filename,
+void write_output_single_file(const std::string         &output_filename,
                               const std::vector<edge_t> &edges, ygm::comm &c) {
   MPI_Comm mpi_comm = c.get_mpi_comm();
 
@@ -348,14 +348,14 @@ void write_output_single_file(const std::string &output_filename,
   c.cout0("Dumped AMST edges to: ", output_filename);
 }
 
-void write_output_single_pm(const std::string &output_filename,
+void write_output_single_pm(const std::string         &output_filename,
                             const std::vector<edge_t> &edges, ygm::comm &c) {
   const size_t num_edges = c.all_reduce_sum(edges.size());
 
   MPI_Comm mpi_comm = c.get_mpi_comm();
   if (c.rank0()) {
     metall::manager manager(metall::create_only, output_filename);
-    auto *amst_edges = manager.construct<cls::weighted_edge_list_t>(
+    auto           *amst_edges = manager.construct<cls::weighted_edge_list_t>(
         metall::unique_instance)(manager.get_allocator());
     amst_edges->reserve(num_edges);
 
@@ -385,18 +385,18 @@ int main(int argc, char **argv) {
   ygm::comm world(&argc, &argv);
 
   std::vector<std::string> txt_input_filenames;
-  std::string pm_input_path;
-  std::string pm_output_filename;
-  float amst_approx_bound{2.0};
+  std::string              pm_input_path;
+  std::string              pm_output_filename;
+  float                    amst_approx_bound{1.1};
 
   parse_cmd_line(argc, argv, world, amst_approx_bound, txt_input_filenames,
                  pm_input_path, pm_output_filename);
 
   world.cout0("Reading edges");
   ygm::utility::timer read_timer;
-  auto edges = (txt_input_filenames.size() > 0)
-                   ? read_dnnd_output(txt_input_filenames, world)
-                   : read_pm_knng_output(pm_input_path, world);
+  auto                edges = (txt_input_filenames.size() > 0)
+                                  ? read_dnnd_output(txt_input_filenames, world)
+                                  : read_pm_knng_output(pm_input_path, world);
   world.cout0("Edge reading time (s): ", read_timer.elapsed());
 
   auto amst_edges = approx_mst(edges, amst_approx_bound, world);

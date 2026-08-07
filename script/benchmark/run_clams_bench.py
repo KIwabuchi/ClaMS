@@ -59,6 +59,11 @@ def parse_options():
                         default='',
                         help='Path to an already constructed DNND PM datastore. If specified, skip the DNND step.')
 
+    # Approximate Minimum Spanning Tree (AMST)
+    # -a: approximate bound, default 1.1
+    parser.add_argument('-a', '--amst_approx_bound', type=float, default=1.1,
+                        help='Approximation bound for AMST. Default is 1.1.')
+
     # For HDBSCAN
     # Min cluster size, conmma separated list of min cluster sizes, or range of min cluster sizes
     parser.add_argument('-m', '--min_cluster_size', default='5',
@@ -148,7 +153,8 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                   dnnd_exe, nng_k, distance_func,
                                   points_file_format, point_path,
                                   mfc_exe,
-                                  amst_exe, clustering_exe,
+                                  amst_exe, amst_approx_bound,
+                                  clustering_exe,
                                   evaluator,
                                   ygm_cluster_eval, verbose,
                                   ground_truth_path,
@@ -202,7 +208,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         job_script.write("date\n")
         job_script.write(f"echo \"Running AMST\"\n")
         amst_ds_path = f"{work_dir}/amst_pm_datastore"
-        amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path}"
+        amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path} -e {amst_approx_bound}"
         add_srun_cmd(num_tasks_per_node, amst_command, job_script)
 
         # Run the HPC Clustering step
@@ -297,6 +303,7 @@ def main():
                                                opts.point_path,
                                                opts.mfc_exe,
                                                opts.amst_exe,
+                                               opts.amst_approx_bound,
                                                opts.clustering_exe,
                                                evaluator,
                                                opts.ygm_cluster_eval,
@@ -307,17 +314,20 @@ def main():
                                                opts.input_dnnd_ds_path)
     print(f"Generated batch script: {job_script}")
 
+    job_submission_cmd = f"sbatch {opts.sbatch_opts} {job_script}"
     # Write job execution commands log
     with open(f'{job_dir}/info.txt', 'w') as f:
         f.write(f"Command executed by user:\n")
         f.write(' '.join(sys.argv))
         f.write('\n\n')
-        f.write(f"To submit the job, run:\nsbatch {opts.sbatch_opts} {job_script}\n")
+        f.write(f"To submit the job, run:\n{job_submission_cmd}\n")
 
     # Submit the job
     if opts.submit_job:
         print(f"Submit job: {job_script}")
-        os.system(f"sbatch {opts.sbatch_opts} {job_script}")
+        os.system(job_submission_cmd)
+    else:
+        print(f"To submit the job, run:\n{job_submission_cmd}\n")
 
 
 if __name__ == '__main__':

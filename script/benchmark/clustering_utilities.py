@@ -27,7 +27,7 @@ def eval_clusters(cluster_labels, true_labels):
                                          cluster_labels[clustered_points])
         # sil = silhouette_score(raw_data[clustered_points], cluster_labels[clustered_points])
         pct_clustered = (np.sum(clustered_points) / cluster_labels.shape[0])
-        print(f"Clustered Points: {pct_clustered * 100:.2f}%")
+        print(f"Cluster coverage (%): {pct_clustered * 100:.2f}")
     else:
         ari = adjusted_rand_score(true_labels, cluster_labels)
         ami = adjusted_mutual_info_score(true_labels, cluster_labels)

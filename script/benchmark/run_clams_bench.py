@@ -173,9 +173,12 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         add_cmd(f'mkdir -p {work_dir}', job_script, True, False)
 
         # Run the DNND step
+        job_script.write("echo\n")
         job_script.write("date\n")
         if len(input_dnnd_ds_path) == 0:
+            job_script.write(f"echo ================================\n")
             job_script.write(f"echo \"Building KNNG\"\n")
+            job_script.write(f"echo ================================\n")
             dnnd_ds_path = f"{work_dir}/dnnd_pm_datastore"
             dnnd_batch_size = 2 ** 25
             verbose_flag = '-v' if verbose else ''
@@ -187,33 +190,43 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             dnnd_ds_path = input_dnnd_ds_path
 
         # Connect the CCs
+        job_script.write("echo\n")
         job_script.write("date\n")
-        job_script.write(
-            f"echo \"Randomly connect components\"\n")
+        job_script.write(f"echo ================================\n")
+        job_script.write(f"echo \"Connect components\"\n")
+        job_script.write(f"echo ================================\n")
         mfc_command = f"{mfc_exe} -d {dnnd_ds_path} -f {distance_func}"
         add_srun_cmd(num_tasks_per_node, mfc_command, job_script)
 
         # Convert to core distance
         # TODO: Implement
         if False and min_samples > 0:
+            job_script.write("echo\n")
             job_script.write("date\n")
-            job_script.write(
-                f"echo \"Convert to core distance kNNG\"\n")
+            job_script.write(f"echo ================================\n")
+            job_script.write(f"echo Convert to core distance kNNG\n")
+            job_script.write(f"echo ================================\n")
             knng_coredist_dir = f"{work_dir}/knng_coredist/"
             add_cmd(f'mkdir -p {knng_coredist_dir}', job_script)
             conv2coredist_cmd = f"./src/conv_knng_to_core_dist -i {dnnd_ds_path} -o {knng_coredist_dir}/knng.txt -m {min_samples}"
             add_cmd(conv2coredist_cmd, job_script)
 
         # Run the AMST step
+        job_script.write("echo\n")
         job_script.write("date\n")
+        job_script.write(f"echo ================================\n")
         job_script.write(f"echo \"Running AMST\"\n")
+        job_script.write(f"echo ================================\n")
         amst_ds_path = f"{work_dir}/amst_pm_datastore"
         amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path} -e {amst_approx_bound}"
         add_srun_cmd(num_tasks_per_node, amst_command, job_script)
 
         # Run the HPC Clustering step
+        job_script.write("echo\n")
         job_script.write("date\n")
-        job_script.write(f"echo \"Running HPC Clustering\"\n")
+        job_script.write(f"echo ================================\n")
+        job_script.write(f"echo \"Running CLAMS-HDBSCAN\"\n")
+        job_script.write(f"echo ================================\n")
         for try_no, set_cmd in enumerate(min_cluster_size_set_cmnds):
             add_cmd(set_cmd, job_script, False, False)
 

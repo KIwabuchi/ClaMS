@@ -61,15 +61,16 @@ def parse_options():
 
     # Approximate Minimum Spanning Tree (AMST)
     # -a: approximate bound, default 1.1
-    parser.add_argument('-a', '--amst_approx_bound', type=float, default=1.1,
-                        help='Approximation bound for AMST. Default is 1.1.')
+    parser.add_argument('-a', '--amst_approx_bound', default='1.1',
+                        dest='amst_approx_bound_range', action='store', type=str,
+                        help='Approximation bound for AMST. Single value or comma separated list of values (e.g., 1.1,1.2,1.4). Default is 1.1.')
 
     # For HDBSCAN
     # Min cluster size, conmma separated list of min cluster sizes, or range of min cluster sizes
     parser.add_argument('-m', '--min_cluster_size', default='5',
                         dest='min_cluster_size_range',
                         action='store', type=str,
-                        help='Minimum cluster size. Comma separated list of values or range of values (e.g., 5,10,15 or 5-15)')
+                        help='Minimum cluster size. Single value or, comma separated list of values or range of values (e.g., 5,10,15 or 5-15)')
     # Min samples
     parser.add_argument('-s', '--min_samples', type=int, default=-1,
                         dest='min_samples',
@@ -153,7 +154,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                   dnnd_exe, nng_k, distance_func,
                                   points_file_format, point_path,
                                   mfc_exe,
-                                  amst_exe, amst_approx_bound,
+                                  amst_exe, amst_approx_bound_list,
                                   clustering_exe,
                                   evaluator,
                                   ygm_cluster_eval, verbose,
@@ -193,7 +194,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         job_script.write("echo\n")
         job_script.write("date\n")
         job_script.write(f"echo ================================\n")
-        job_script.write(f"echo \"Connect components\"\n")
+        job_script.write(f"echo \"Running MFS\"\n")
         job_script.write(f"echo ================================\n")
         mfc_command = f"{mfc_exe} -d {dnnd_ds_path} -f {distance_func}"
         add_srun_cmd(num_tasks_per_node, mfc_command, job_script)
@@ -211,53 +212,58 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             conv2coredist_cmd = f"./src/conv_knng_to_core_dist -i {dnnd_ds_path} -o {knng_coredist_dir}/knng.txt -m {min_samples}"
             add_cmd(conv2coredist_cmd, job_script)
 
-        # Run the AMST step
-        job_script.write("echo\n")
-        job_script.write("date\n")
-        job_script.write(f"echo ================================\n")
-        job_script.write(f"echo \"Running AMST\"\n")
-        job_script.write(f"echo ================================\n")
-        amst_ds_path = f"{work_dir}/amst_pm_datastore"
-        amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path} -e {amst_approx_bound}"
-        add_srun_cmd(num_tasks_per_node, amst_command, job_script)
+        try_no = 0
+        for amst_approx_bound in amst_approx_bound_list:
+            # Run the AMST step
+            job_script.write("echo\n")
+            job_script.write("date\n")
+            job_script.write(f"echo ================================\n")
+            job_script.write(f"echo \"Running AMST, approx bound = {amst_approx_bound}\"\n")
+            job_script.write(f"echo ================================\n")
+            amst_ds_path = f"{work_dir}/amst_pm_datastore_a{amst_approx_bound}"
+            amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path} -e {amst_approx_bound}"
+            add_srun_cmd(num_tasks_per_node, amst_command, job_script)
 
-        # Run the HPC Clustering step
-        job_script.write("echo\n")
-        job_script.write("date\n")
-        job_script.write(f"echo ================================\n")
-        job_script.write(f"echo \"Running CLAMS-HDBSCAN\"\n")
-        job_script.write(f"echo ================================\n")
-        for try_no, set_cmd in enumerate(min_cluster_size_set_cmnds):
-            add_cmd(set_cmd, job_script, False, False)
+            # Run the HPC Clustering step
+            for set_cmd in min_cluster_size_set_cmnds:
+                # Set the min cluster size environment variable for this run
+                add_cmd(set_cmd, job_script, False, False)
 
-            job_script.write(
-                f"echo \"Min clustering size ${{MIN_CLUSTER_SIZE}}\"\n")
-            cluster_label_file = f"{work_dir}/cluster_labels-try{try_no}.txt"
-            cluster_tree_file = f"{work_dir}/cluster_tree-try{try_no}.txt"
-            hpc_clustering_command = (f"{clustering_exe} -i {amst_ds_path} -M "
-                                      f" -m ${{MIN_CLUSTER_SIZE}} "
-                                      f" -o {cluster_label_file} "
-                                      f" -c {cluster_tree_file} "
-                                      f" -P ")
-            add_cmd(hpc_clustering_command, job_script)
+                job_script.write("echo\n")
+                job_script.write("date\n")
+                job_script.write(f"echo ================================\n")
+                job_script.write(f"echo \"Running CLAMS-HDBSCAN, min cluster size = ${{MIN_CLUSTER_SIZE}}\"\n")
+                job_script.write(f"echo ================================\n")
 
-            # Run the evaluation step
-            if ground_truth_path:
-                if ygm_cluster_eval:
-                    job_script.write(
-                        f"echo \"Evaluating Clustering using YGM\"\n")
-                    if verbose:
-                        evaluation_command = f"{evaluator} -v -g {ground_truth_path} {cluster_label_file}"
+                job_script.write(
+                    f"echo \"Min cluster size ${{MIN_CLUSTER_SIZE}}\"\n")
+                cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
+                cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
+                hpc_clustering_command = (f"{clustering_exe} -i {amst_ds_path} -M "
+                                        f" -m ${{MIN_CLUSTER_SIZE}} "
+                                        f" -o {cluster_label_file} "
+                                        f" -c {cluster_tree_file} "
+                                        f" -P ")
+                add_cmd(hpc_clustering_command, job_script)
+
+                # Run the evaluation step
+                if ground_truth_path:
+                    if ygm_cluster_eval:
+                        job_script.write(
+                            f"echo \"Evaluating Clustering using YGM\"\n")
+                        if verbose:
+                            evaluation_command = f"{evaluator} -v -g {ground_truth_path} {cluster_label_file}"
+                        else:
+                            evaluation_command = f"{evaluator} -g {ground_truth_path} {cluster_label_file}"
+                        add_srun_cmd(num_tasks_per_node, evaluation_command,
+                                    job_script)
                     else:
-                        evaluation_command = f"{evaluator} -g {ground_truth_path} {cluster_label_file}"
-                    add_srun_cmd(num_tasks_per_node, evaluation_command,
-                                 job_script)
-                else:
-                    job_script.write(
-                        f"echo \"Evaluating Clustering using python script\"\n")
-                    evaluation_command = f"python3 {evaluator} -c {cluster_label_file} -g {ground_truth_path}"
-                    add_cmd(evaluation_command, job_script)
-            job_script.write(f"echo \"\" \n")
+                        job_script.write(
+                            f"echo \"Evaluating Clustering using python script\"\n")
+                        evaluation_command = f"python3 {evaluator} -c {cluster_label_file} -g {ground_truth_path}"
+                        add_cmd(evaluation_command, job_script)
+                job_script.write(f"echo \"\" \n")
+            try_no += 1
 
     # If the file was not created, return an error
     if not os.path.exists(job_script_path):
@@ -306,6 +312,8 @@ def main():
     min_cluster_size_set_cmnds = [f'MIN_CLUSTER_SIZE={x}' for x in
                                   min_cluster_size_list]
 
+    amst_approx_bound_list = parse_float_list(opts.amst_approx_bound_range)
+
     # Generate a benchmark batch script
     job_script = gen_clams_bench_script(job_name, job_dir, work_dir,
                                                opts.num_nodes,
@@ -316,7 +324,7 @@ def main():
                                                opts.point_path,
                                                opts.mfc_exe,
                                                opts.amst_exe,
-                                               opts.amst_approx_bound,
+                                               amst_approx_bound_list,
                                                opts.clustering_exe,
                                                evaluator,
                                                opts.ygm_cluster_eval,

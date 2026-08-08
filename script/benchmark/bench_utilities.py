@@ -84,6 +84,9 @@ def grep_file(file, text_pattern):
         lines = f.readlines()
         return [line for line in lines if text_pattern in line]
 
+# Parse a range string and return a list of integers
+# e.g., "1-5" -> [1, 2, 3, 4, 5]
+# e.g., "1,3,5" -> [1, 3, 5]
 def parse_range(range_str):
     if range_str is None:
         return [None]
@@ -93,3 +96,11 @@ def parse_range(range_str):
         return list(range(int(start), int(end) + 1))
     else:
         return [int(x) for x in range_str.split(',')]
+
+# Parse a list of floats from a string and return a list of floats
+# e.g., "1.0,2.5,3.14" -> [1.0, 2.5, 3.14]
+def parse_float_list(float_list_str):
+    if float_list_str is None:
+        return [None]
+
+    return [float(x) for x in float_list_str.split(',')]

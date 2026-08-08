@@ -54,16 +54,21 @@ def parse_options():
                              'a KNNG value.')
     parser.add_argument('--neodnnd', action='store_true',
                         help='Use NEO-DNND (build_knng_neo) instead of build_knng.')
+    parser.add_argument('--neodnnd_threads', type=int, default=2,
+                        help='Number of threads to use for NEO-DNND. Ignored if --neodnnd is not specified.')
 
     parser.add_argument('-G', '--input_dnnd_ds_path',
                         default='',
                         help='Path to an already constructed DNND PM datastore. If specified, skip the DNND step.')
 
+    # KNNG backup
+    parser.add_argument('-R', '--backup_knng', action='store_true',
+                        help='Backup the KNNG datastore after DNND step.')
+
     # Approximate Minimum Spanning Tree (AMST)
-    # -a: approximate bound, default 1.1
     parser.add_argument('-a', '--amst_approx_bound', default='1.1',
                         dest='amst_approx_bound_range', action='store', type=str,
-                        help='Approximation bound for AMST. Single value or comma separated list of values (e.g., 1.1,1.2,1.4). Default is 1.1.')
+                        help='Approximation bound for AMST. Single value or comma separated list of values (e.g., 1.1,1.2,1.4).')
 
     # For HDBSCAN
     # Min cluster size, conmma separated list of min cluster sizes, or range of min cluster sizes
@@ -153,6 +158,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                   num_nodes, num_tasks_per_node,
                                   dnnd_exe, nng_k, distance_func,
                                   points_file_format, point_path,
+                                  backup_knng,
                                   mfc_exe,
                                   amst_exe, amst_approx_bound_list,
                                   clustering_exe,
@@ -185,6 +191,13 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             verbose_flag = '-v' if verbose else ''
             dnnd_command = f"{dnnd_exe} {verbose_flag} -k {nng_k} -f {distance_func} -o {dnnd_ds_path} -b {dnnd_batch_size} -p {points_file_format} {point_path}"
             add_srun_cmd(num_tasks_per_node, dnnd_command, job_script)
+            if backup_knng:
+                dnnd_ds_path_backup = f"{dnnd_ds_path}_backup"
+                job_script.write(f"echo\n")
+                job_script.write("date\n")
+                job_script.write(f"echo \"Backing up KNNG datastore\"\n")
+                backup_knng_command = f"cp -r {dnnd_ds_path} {dnnd_ds_path_backup}"
+                add_cmd(backup_knng_command, job_script)
         else:
             job_script.write(
                 f"Using existing DNND datastore at {input_dnnd_ds_path}\n")
@@ -302,6 +315,8 @@ def main():
         default_dnnd_exe = f'{os.getcwd()}/src/knng/build_knng'
         if dnnd_exe == default_dnnd_exe:
             dnnd_exe = f'{os.getcwd()}/src/knng/build_knng_neo'
+            # This is not the best way to set the number of threads for NEO-DNND, but it is a simple way to do it for now.
+            dnnd_exe = f'{dnnd_exe} -T {opts.neodnnd_threads}'
 
     if opts.ygm_cluster_eval:
         evaluator = opts.ygm_evaluator_exe
@@ -322,6 +337,7 @@ def main():
                                                opts.distance_func,
                                                opts.points_file_format,
                                                opts.point_path,
+                                               opts.backup_knng,
                                                opts.mfc_exe,
                                                opts.amst_exe,
                                                amst_approx_bound_list,

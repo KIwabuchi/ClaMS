@@ -143,7 +143,7 @@ std::vector<edge_t> read_dnnd_output(const std::vector<std::string> &filenames,
       distance_t dist;
 
       neighbors_ss >> src;
-      distances_ss >> dist;
+      distances_ss >> dist;  // Dummy value, not used
 
       while (neighbors_ss >> ngbr) {
         distances_ss >> dist;

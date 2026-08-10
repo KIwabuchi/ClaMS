@@ -1,7 +1,6 @@
 // Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
 // Project Developers. See the top-level COPYRIGHT file for details.
 
-
 // Find the MST using Kruskal's algorithm
 
 // If GCC is used,
@@ -11,11 +10,11 @@
 #warning "No parallelism library is used."
 #endif
 
+#include <unistd.h>
 #include <execution>
 #include <filesystem>
 #include <iostream>
 #include <tuple>
-#include <unistd.h>
 #include <unordered_map>
 #include <vector>
 
@@ -27,14 +26,13 @@ namespace omp = metall::utility::omp;
 
 bool parse_option(int argc, char *argv[], std::filesystem::path &knng_dir,
                   std::filesystem::path &output_dir) {
-
   if (argc != 3) {
     std::cerr << "Usage: " << argv[0] << " <knng_dir> <output_dir>"
               << std::endl;
     return false;
   }
 
-  knng_dir = std::filesystem::path(argv[1]);
+  knng_dir   = std::filesystem::path(argv[1]);
   output_dir = std::filesystem::path(argv[2]);
 
   return true;
@@ -60,7 +58,7 @@ int main(int argc, char *argv[]) {
 
   clams::weighted_edge_list_t edges;
   spdlog::info("Read KNNG edges");
-  clams::read_knn_edges(knng_files, edges);
+  clams::read_knng_edges(knng_files, edges);
   spdlog::info("#of edges {}", edges.size());
 
   spdlog::info("Sort edges");
@@ -76,7 +74,7 @@ int main(int argc, char *argv[]) {
   spdlog::info("Finished sorting edges");
 
   std::unordered_map<id_t, id_t> parent_tbl;
-  clams::weighted_edge_list_t mst_edges;
+  clams::weighted_edge_list_t    mst_edges;
   spdlog::info("Start Kruskal's algorithm");
   for (const auto &edge : edges) {
     const auto src = edge.ids[0];
@@ -103,9 +101,17 @@ int main(int argc, char *argv[]) {
   }
   spdlog::info("Finished Kruskal's algorithm");
 
-  std::filesystem::create_directories(output_dir);
+  // Show the sum of distances of the MST edges
+  {
+    double total_distance = 0.0;
+    for (const auto &edge : mst_edges) {
+      total_distance += edge.distance;
+    }
+    spdlog::info("Total distance of MST edges: {}", total_distance);
+  }
 
   spdlog::info("Write MST edges int {}", output_dir.string());
+  std::filesystem::create_directories(output_dir);
   OMP_DIRECTIVE(parallel) {
     std::string path =
         output_dir /

@@ -56,6 +56,10 @@ def parse_options():
                         help='Use NEO-DNND (build_knng_neo) instead of build_knng.')
     parser.add_argument('--neodnnd_threads', type=int, default=2,
                         help='Number of threads to use for NEO-DNND. Ignored if --neodnnd is not specified.')
+    parser.add_argument('--nng_r', type=float, default=0.5,
+                        help='The r (sampling) parameter for KNNG construction.')
+    parser.add_argument('--nng_delta', type=float, default=0.0001,
+                        help='The delta parameter (termination condition) for KNNG construction.')
 
     parser.add_argument('-G', '--input_dnnd_ds_path',
                         default='',
@@ -158,6 +162,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                   num_nodes, num_tasks_per_node,
                                   dnnd_exe, nng_k, distance_func,
                                   points_file_format, point_path,
+                                  nng_r, nng_delta,
                                   backup_knng,
                                   mfc_exe,
                                   amst_exe, amst_approx_bound_list,
@@ -189,7 +194,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             dnnd_ds_path = f"{work_dir}/dnnd_pm_datastore"
             dnnd_batch_size = 2 ** 25
             verbose_flag = '-v' if verbose else ''
-            dnnd_command = f"{dnnd_exe} {verbose_flag} -k {nng_k} -f {distance_func} -o {dnnd_ds_path} -b {dnnd_batch_size} -p {points_file_format} {point_path}"
+            dnnd_command = f"{dnnd_exe} {verbose_flag} -k {nng_k} -r {nng_r} -d {nng_delta} -f {distance_func} -o {dnnd_ds_path} -b {dnnd_batch_size} -p {points_file_format} {point_path}"
             add_srun_cmd(num_tasks_per_node, dnnd_command, job_script)
             if backup_knng:
                 dnnd_ds_path_backup = f"{dnnd_ds_path}_backup"
@@ -337,6 +342,8 @@ def main():
                                                opts.distance_func,
                                                opts.points_file_format,
                                                opts.point_path,
+                                               opts.nng_r,
+                                               opts.nng_delta,
                                                opts.backup_knng,
                                                opts.mfc_exe,
                                                opts.amst_exe,

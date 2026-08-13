@@ -144,7 +144,6 @@ int main(int argc, char* argv[]) {
     spdlog::info("Reading MST edges");
     weighted_edge_list_t input_mst_edges;
     read_edges(opt.mst_edges_path, input_mst_edges);
-    assert(opt.min_cluster_size > 1);  // Current implementation restriction.
     spdlog::info("#of MST edges: {}", input_mst_edges.size());
     for (const auto& edge : input_mst_edges) {
       mst[edge.ids[0]].push_back(edge.ids[1]);

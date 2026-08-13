@@ -51,7 +51,8 @@ def parse_options():
                         dest='gt_path',
                         required=True, action='store', type=str,
                         help='Path to file or directory containing ground truth labels')
-
+    parser.add_argument('-s', '--singleton_noise_points', action='store_true',
+                        help='Assign a singleton cluster to each noise point in the clustering result.')
     args = parser.parse_args()
     return args
 
@@ -63,7 +64,10 @@ def main():
     true_labels = read_label_data(opt.gt_path)
 
     try:
-        eval_clusters(cluster_labels, true_labels)
+        eval_clusters(cluster_labels, true_labels, False)
+        contains_noise_points = np.any(cluster_labels == -1)
+        if opt.singleton_noise_points and contains_noise_points:
+            eval_clusters(cluster_labels, true_labels, True)
     except Exception as e:
         print(f"Error: {e}")
         exit(1)

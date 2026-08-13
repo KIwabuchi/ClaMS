@@ -92,6 +92,8 @@ def parse_options():
     # Use the -y flag to use a YGM calculation instead
     parser.add_argument('-y', '--ygm_cluster_eval', action='store_true',
                         help='Use YGM cluster evaluation calculation.')
+    parser.add_argument('-z', '--dummy_cluster_id', action='store_true',
+                        help='Assign a singleton cluster to each noise point in the clustering result.')
 
     # For output
     parser.add_argument('-o', '--output_root_dir',
@@ -138,6 +140,9 @@ def parse_options():
     parser.add_argument('-Y', '--ygm_evaluator_exe',
                         default=f'{cwd}/tpls/partition-comparison/build/src/clustering_metrics',
                         help='Path to the YGM clustering evaluation executable.')
+    parser.add_argument('--noise_point_assigner_exe',
+                        default=f'{cwd}/src/clustering/cluster_noise_points',
+                        help='Path to the noise point assigner executable.')
 
     # Etc
     parser.add_argument('-v', '--verbose', action='store_true',
@@ -150,6 +155,42 @@ def parse_options():
 def generate_job_name():
     time.sleep(2)
     return f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def add_clustering_evaluation(job_script, cluster_label_file, amst_ds_path,
+                              ground_truth_path, evaluator,
+                              noise_point_assigner_exe, ygm_cluster_eval,
+                              num_tasks_per_node, verbose,
+                              singleton_cluster_to_noise_points):
+    job_script.write("echo\n")
+    job_script.write("date\n")
+    job_script.write(f"echo ================================\n")
+    job_script.write(f"echo \"Evaluating Clustering\"\n")
+    job_script.write(f"echo ================================\n")
+
+    if ygm_cluster_eval:
+        evaluated_label_file = f"{cluster_label_file}.noise_assigned"
+        assignment_command = (f"{noise_point_assigner_exe} -M "
+                              f"-m {amst_ds_path} "
+                              f"-c {cluster_label_file} "
+                              f"-o {evaluated_label_file}")
+        add_cmd(assignment_command, job_script)
+
+        job_script.write("echo \"Evaluating Clustering using YGM\"\n")
+        verbose_flag = " -v" if verbose else ""
+        evaluation_command = (f"{evaluator}{verbose_flag} "
+                              f"-g {ground_truth_path} "
+                              f"{evaluated_label_file}")
+        add_srun_cmd(num_tasks_per_node, evaluation_command, job_script)
+    else:
+        job_script.write(
+            "echo \"Evaluating Clustering using python script\"\n")
+        evaluation_command = (f"python3 {evaluator} "
+                              f"-c {cluster_label_file} "
+                              f"-g {ground_truth_path}")
+        if singleton_cluster_to_noise_points:
+            evaluation_command += " -s"
+        add_cmd(evaluation_command, job_script)
 
 
 # Function to generate the batch script for running a benchmark
@@ -170,9 +211,11 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                   evaluator,
                                   ygm_cluster_eval, verbose,
                                   ground_truth_path,
+                                  singleton_cluster_to_noise_points,
                                   min_cluster_size_set_cmnds,
                                   min_samples,
-                                  input_dnnd_ds_path=''):
+                                  noise_point_assigner_exe,
+                                  input_dnnd_ds_path='',):
     create_dir(job_dir)
     job_script_path = f'{job_dir}/job.sh'
 
@@ -266,20 +309,31 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
 
                 # Run the evaluation step
                 if ground_truth_path:
-                    if ygm_cluster_eval:
-                        job_script.write(
-                            f"echo \"Evaluating Clustering using YGM\"\n")
-                        if verbose:
-                            evaluation_command = f"{evaluator} -v -g {ground_truth_path} {cluster_label_file}"
-                        else:
-                            evaluation_command = f"{evaluator} -g {ground_truth_path} {cluster_label_file}"
-                        add_srun_cmd(num_tasks_per_node, evaluation_command,
-                                    job_script)
-                    else:
-                        job_script.write(
-                            f"echo \"Evaluating Clustering using python script\"\n")
-                        evaluation_command = f"python3 {evaluator} -c {cluster_label_file} -g {ground_truth_path}"
-                        add_cmd(evaluation_command, job_script)
+                    add_clustering_evaluation(
+                        job_script, cluster_label_file, amst_ds_path,
+                        ground_truth_path, evaluator, noise_point_assigner_exe,
+                        ygm_cluster_eval, num_tasks_per_node, verbose,
+                        singleton_cluster_to_noise_points)
+
+                    job_script.write("echo\n")
+                    job_script.write("date\n")
+                    job_script.write(f"echo ================================\n")
+                    job_script.write(f"echo \"Assign clusters to noise points\"\n")
+                    job_script.write(f"echo ================================\n")
+                    # Remove the .txt extension and add .noise_assigned.txt
+                    cluster_label_file_no_noise = f"{cluster_label_file[:-4]}.noise_assigned.txt"
+                    cluster_assign_command = (f"{noise_point_assigner_exe} -M "
+                                              f"-m {amst_ds_path} "
+                                              f"-c {cluster_label_file} "
+                                              f"-o {cluster_label_file_no_noise}")
+                    add_cmd(cluster_assign_command, job_script)
+                    add_clustering_evaluation(
+                        job_script, cluster_label_file_no_noise, amst_ds_path,
+                        ground_truth_path, evaluator, noise_point_assigner_exe,
+                        ygm_cluster_eval, num_tasks_per_node, verbose,
+                        singleton_cluster_to_noise_points)
+
+
                 job_script.write(f"echo \"\" \n")
             try_no += 1
 
@@ -353,8 +407,10 @@ def main():
                                                opts.ygm_cluster_eval,
                                                opts.verbose,
                                                opts.ground_truth_path,
+                                               opts.dummy_cluster_id,
                                                min_cluster_size_set_cmnds,
                                                opts.min_samples,
+                                               opts.noise_point_assigner_exe,
                                                opts.input_dnnd_ds_path)
     print(f"Generated batch script: {job_script}")
 

@@ -159,7 +159,7 @@ def generate_job_name():
 
 def add_clustering_evaluation(job_script, cluster_label_file, amst_ds_path,
                               ground_truth_path, evaluator,
-                              noise_point_assigner_exe, ygm_cluster_eval,
+                              ygm_cluster_eval,
                               num_tasks_per_node, verbose,
                               singleton_cluster_to_noise_points):
     job_script.write("echo\n")
@@ -169,18 +169,11 @@ def add_clustering_evaluation(job_script, cluster_label_file, amst_ds_path,
     job_script.write(f"echo ================================\n")
 
     if ygm_cluster_eval:
-        evaluated_label_file = f"{cluster_label_file}.noise_assigned"
-        assignment_command = (f"{noise_point_assigner_exe} -M "
-                              f"-m {amst_ds_path} "
-                              f"-c {cluster_label_file} "
-                              f"-o {evaluated_label_file}")
-        add_cmd(assignment_command, job_script)
-
         job_script.write("echo \"Evaluating Clustering using YGM\"\n")
         verbose_flag = " -v" if verbose else ""
-        evaluation_command = (f"{evaluator}{verbose_flag} "
+        evaluation_command = (f"{evaluator} {verbose_flag} "
                               f"-g {ground_truth_path} "
-                              f"{evaluated_label_file}")
+                              f"{cluster_label_file}")
         add_srun_cmd(num_tasks_per_node, evaluation_command, job_script)
     else:
         job_script.write(
@@ -311,7 +304,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                 if ground_truth_path:
                     add_clustering_evaluation(
                         job_script, cluster_label_file, amst_ds_path,
-                        ground_truth_path, evaluator, noise_point_assigner_exe,
+                        ground_truth_path, evaluator,
                         ygm_cluster_eval, num_tasks_per_node, verbose,
                         singleton_cluster_to_noise_points)
 
@@ -327,9 +320,11 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                               f"-c {cluster_label_file} "
                                               f"-o {cluster_label_file_no_noise}")
                     add_cmd(cluster_assign_command, job_script)
+
+                    
                     add_clustering_evaluation(
                         job_script, cluster_label_file_no_noise, amst_ds_path,
-                        ground_truth_path, evaluator, noise_point_assigner_exe,
+                        ground_truth_path, evaluator,
                         ygm_cluster_eval, num_tasks_per_node, verbose,
                         singleton_cluster_to_noise_points)
 

@@ -1,7 +1,6 @@
 // Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
 // Project Developers. See the top-level COPYRIGHT file for details.
 
-
 #pragma once
 
 #include <filesystem>
@@ -55,7 +54,7 @@ inline std::vector<std::filesystem::path> find_files(
 /// \brief Read edges.
 /// \param path A path to an edge file or a directory that contains edge files.
 inline void read_edges(const std::filesystem::path &path,
-                weighted_edge_list_t &edges) {
+                       weighted_edge_list_t        &edges) {
   const auto files = find_files(path);
   for (const auto &file : files) {
     std::ifstream ifs(file);
@@ -66,8 +65,8 @@ inline void read_edges(const std::filesystem::path &path,
 
     std::string line;
     while (true) {
-      id_t src;
-      id_t dst;
+      id_t       src;
+      id_t       dst;
       distance_t dist;
       ifs >> src >> dst >> dist;
       if (ifs.eof()) {
@@ -78,12 +77,13 @@ inline void read_edges(const std::filesystem::path &path,
   }
 }
 
-inline void read_knn_edges(const std::vector<std::filesystem::path> &knng_files,
-                    weighted_edge_list_t &edges) {
+inline void read_knng_edges(
+    const std::vector<std::filesystem::path> &knng_files,
+    weighted_edge_list_t                     &edges) {
   std::size_t num_edges = 0;
   OMP_DIRECTIVE(parallel for reduction(+ : num_edges))
   for (std::size_t fno = 0; fno < knng_files.size(); ++fno) {
-    const auto &file = knng_files[fno];
+    const auto   &file = knng_files[fno];
     std::ifstream ifs(file);
     if (!ifs.is_open()) {
       std::cerr << "Cannot open file: " << file << std::endl;
@@ -97,7 +97,7 @@ inline void read_knn_edges(const std::vector<std::filesystem::path> &knng_files,
         break;  // End of file
       }
       std::istringstream iss(line);
-      id_t buf;
+      id_t               buf;
       while (iss >> buf) {
         ++num_edges;
       }
@@ -112,7 +112,7 @@ inline void read_knn_edges(const std::vector<std::filesystem::path> &knng_files,
   std::atomic<long long> cnt_edges{0};
   OMP_DIRECTIVE(parallel for)
   for (std::size_t fno = 0; fno < knng_files.size(); ++fno) {
-    const auto &file = knng_files[fno];
+    const auto   &file = knng_files[fno];
     std::ifstream ifs(file);
     if (!ifs.is_open()) {
       std::cerr << "Cannot open file: " << file << std::endl;
@@ -125,7 +125,7 @@ inline void read_knn_edges(const std::vector<std::filesystem::path> &knng_files,
       {
         std::getline(ifs, line);
         std::istringstream iss(line);
-        id_t buf;
+        id_t               buf;
         while (iss >> buf) {
           ids.push_back(buf);
         }
@@ -135,7 +135,7 @@ inline void read_knn_edges(const std::vector<std::filesystem::path> &knng_files,
       {
         std::getline(ifs, line);
         std::istringstream iss(line);
-        distance_t buf;
+        distance_t         buf;
         while (iss >> buf) {
           dists.push_back(buf);
         }
@@ -154,7 +154,7 @@ inline void read_knn_edges(const std::vector<std::filesystem::path> &knng_files,
       const id_t src = ids[0];
       for (std::size_t i = 1; i < ids.size(); ++i) {
         const auto index = cnt_edges.fetch_add(1);
-        edges[index] = weighted_edge_t{src, ids[i], dists[i]};
+        edges[index]     = weighted_edge_t{src, ids[i], dists[i]};
       }
     }
   }

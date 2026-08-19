@@ -174,7 +174,7 @@ int main(int argc, char **argv) {
     comm.barrier();
 
     for (auto &b : bags) {
-      if (b->size() > 112) b->rebalance();
+      if (b->size() > (size_t)comm.size()) b->rebalance();
     }
 
     comm.cout0() << "CC took (s): " << cc_timer.elapsed() << std::endl;

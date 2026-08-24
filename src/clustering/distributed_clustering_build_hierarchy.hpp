@@ -366,10 +366,6 @@ void assign_root_chain_non_alpha_edges_to_clusters(
     }
   }
   comm.barrier();
-
-  // std::cout << "Rank " << comm.rank()
-  //           << " done assigning root chain non-alpha edges"
-  //           << std::endl; // debug
 }
 
 // Process the clusters in the chain map and and fill in missing
@@ -698,9 +694,6 @@ supernode_t fill_missing_root_chain_cluster_info(
                 if (array_index == 0) {
                   root_chain_second_child_supernode =
                       edge_info.dendrogram_children[1];
-                  // std::cout << "Setting 2nd root chain child supernode to: "
-                  //           << edge_info.dendrogram_children[1]
-                  //           << std::endl;  // debug
                 } else {
                   std::cout << "Warning! Edge " << edge_id
                             << ", which is an alpha edge in the root chain "
@@ -730,6 +723,19 @@ supernode_t fill_missing_root_chain_cluster_info(
 
   full_root_chain_cluster_array.for_all(set_non_root_chain_child_lambda);
   comm.barrier();
+
+  // Broadcast the root chain second child supernode so all ranks have the
+  // right value - id_t, uint32_t
+  id_t     local_first  = root_chain_second_child_supernode.first;
+  uint32_t local_second = root_chain_second_child_supernode.second;
+  id_t     global_first;
+  uint32_t global_second;
+  MPI_Allreduce(&local_first, &global_first, 1, mpi_id_type(), MPI_MAX,
+                comm.get_mpi_comm());
+  MPI_Allreduce(&local_second, &global_second, 1, MPI_UINT32_T, MPI_MAX,
+                comm.get_mpi_comm());
+  root_chain_second_child_supernode =
+      std::make_pair(global_first, global_second);
 
   return root_chain_second_child_supernode;
 }

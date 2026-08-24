@@ -47,7 +47,6 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
 
   // Traverse up the chain, calculating size and stability for each cluster
   // along the way
-  id_t chain_child_id = 0;  // for debug printing messages
   for (auto it = chain_cluster_map.begin(); it != chain_cluster_map.end();
        ++it) {
     // Get cluster info for easier referencing
@@ -114,26 +113,6 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
     distance_t lambda_min_edge = lambda_from_dist(cluster_info.min_edge.second);
     distance_t lambda_birth    = lambda_from_dist(cluster_info.birth_distance);
 
-    std::stringstream ss;  // debug
-    ss << std::setprecision(10) << "Cluster: " << it->first
-       << ": size = " << cluster_info.size
-       << ", birth distance = " << cluster_info.birth_distance
-       << ", lambda_birth = " << lambda_birth
-       << ", lambda_min_edge = " << lambda_min_edge << std::endl;
-    ss << "  Child " << cluster_info.child << " with size "
-       << cluster_info.child_size << " and chain child " << chain_child_id
-       << " with size " << chain_size << "; Edges added: ";
-    for (edge_id_with_dist_t &edge : cluster_info.edges) {
-      ss << edge.first << " ";
-    }
-    ss << std::endl;
-
-    // debug
-    if (cluster_info.size < min_cluster_size) {
-      ss << "   We have size " << cluster_info.size
-         << ", which is too small to be a cluster" << std::endl;  // debug
-    }
-
     // If we are too small, then just keep stability = 0
     // Calculate our stability if we have at least min cluster size
     if (cluster_info.size >= min_cluster_size) {
@@ -141,9 +120,6 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
       // into our cluster
       if (cluster_info.child_size < min_cluster_size &&
           chain_size < min_cluster_size) {
-        ss << "   Annex both child clusters, which have sizes: " << chain_size
-           << ", " << cluster_info.child_size << std::endl;  // debug
-
         id_t sum_child_sizes = chain_size + cluster_info.child_size;
         if (sum_child_sizes >= min_cluster_size) {
           // In this case, at min_edge, sum_child_sizes >=
@@ -151,19 +127,11 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
           // We subtract 1 since we will count lambda_min_edge one more
           // time below since min_edge is in edges
           stability = (sum_child_sizes - 1) * (lambda_min_edge - lambda_birth);
-          ss << "   At least min_cluster_size points fall out at "
-                "min_edge "
-             << cluster_info.min_edge << ", giving stability contribution: "
-             << (sum_child_sizes - 1) * (lambda_min_edge - lambda_birth)
-             << std::endl;  // debug
 
           // All other points fall out at their edge
-          ss << "   Stability contributions from edges added: ";  // debug
           for (edge_id_with_dist_t &edge : cluster_info.edges) {
             stability += lambda_from_dist(edge.second) - lambda_birth;
-            ss << lambda_from_dist(edge.second) - lambda_birth << " ";  // debug
           }
-          ss << std::endl;
 
         } else {
           // In this case, at some the k = (min_cluster_size -
@@ -180,21 +148,13 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
           // min_cluster_size points fall out at the cutoff edge
           stability = min_cluster_size *
                       (lambda_from_dist(cutoff_edge->second) - lambda_birth);
-          ss << "   min_cluster_size points fall out at edge " << *cutoff_edge
-             << ", giving stability contribution: "
-             << min_cluster_size *
-                    (lambda_from_dist(cutoff_edge->second) - lambda_birth)
-             << std::endl;  // debug
 
           // All other points fall out at their edge
-          ss << "   Stability contributions from edges added: ";  // debug
           for (int i = k; i < static_cast<int>(cluster_info.edges.size());
                ++i) {
             edge_id_with_dist_t edge = cluster_info.edges.at(i);
             stability += lambda_from_dist(edge.second) - lambda_birth;
-            ss << lambda_from_dist(edge.second) - lambda_birth << " ";  // debug
           }
-          ss << std::endl;
         }
 
         // In this case, the stability to send up is our own stability
@@ -211,18 +171,6 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
           chain_child_is_large_cluster = false;
         }
 
-        if (chain_child_is_large_cluster) {
-          ss << "   Annex child " << cluster_info.child << ", which has size "
-             << cluster_info.child_size << " into chain child "
-             << chain_child_id << ", which has size " << chain_size
-             << std::endl;  // debug
-        } else {
-          ss << "   Annex chain child " << chain_child_id << ", which has size "
-             << chain_size << " into non-chain child " << cluster_info.child
-             << ", which has size " << cluster_info.child_size
-             << std::endl;  // debug
-        }
-
         // 1. Start out with the stability of the large enough cluster
         // 2. Correct the birth distance for the points in the large-enough
         // cluster to be lambda_birth instead of lambda_min_edge (what we
@@ -232,35 +180,23 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
         if (chain_child_is_large_cluster) {
           stability = chain_stability;
           stability += chain_size * (lambda_min_edge - lambda_birth);
-          ss << "   Stability contribution of large child: " << stability
-             << std::endl;  // debug
           stability +=
               cluster_info.child_size * (lambda_min_edge - lambda_birth);
-          ss << "   Stability contribution of small child: "
-             << cluster_info.child_size * (lambda_min_edge - lambda_birth)
-             << std::endl;  // debug
+
         } else {
           stability = cluster_info.child_stability;
           stability +=
               cluster_info.child_size * (lambda_min_edge - lambda_birth);
-          ss << "   Stability contribution of large child: " << stability
-             << std::endl;  // debug
           stability += chain_size * (lambda_min_edge - lambda_birth);
-          ss << "   Stability contribution of small child: "
-             << chain_size * (lambda_min_edge - lambda_birth)
-             << std::endl;  // debug
         }
 
         // Add the stability contribution of other edges added
-        ss << "   Stability contributions from edges added: ";
         for (edge_id_with_dist_t &edge : cluster_info.edges) {
           stability += lambda_from_dist(edge.second) - lambda_birth;
-          ss << lambda_from_dist(edge.second) - lambda_birth << " ";  // debug
         }
         // Since min_edge is in cluster_info.edges, we've over counted its
         // contribution. Subtract the extra instance
         stability -= (lambda_min_edge - lambda_birth);
-        ss << -(lambda_min_edge - lambda_birth) << std::endl;
 
         // In this case, the stability to send up the greater of our own
         // stability and the stability of the large child cluster
@@ -279,26 +215,15 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
         stability = (chain_size + cluster_info.child_size) *
                     (lambda_min_edge - lambda_birth);
 
-        ss << "   Both children are large enough to be their own "
-              "cluster and have sizes: "
-           << chain_size << " and " << cluster_info.child_size
-           << ", giving stability contribution "
-           << (chain_size + cluster_info.child_size) *
-                  (lambda_min_edge - lambda_birth)
-           << std::endl;  // debug
-
         // Add the stability contributions from the points added to
         // this cluster, which come from all edges added other than
         // min_edge
-        ss << "   Stability contributions from edges added: ";
         for (edge_id_with_dist_t &edge : cluster_info.edges) {
           stability += lambda_from_dist(edge.second) - lambda_birth;
-          ss << lambda_from_dist(edge.second) - lambda_birth << " ";  // debug
         }
         // Since min_edge is in cluster_info.edges, we've over counted its
         // contribution. Subtract the extra instance
         stability -= (lambda_min_edge - lambda_birth);
-        ss << -(lambda_min_edge - lambda_birth) << std::endl;
 
         // In this case, the stability to send up is the greater of our own
         // stability and the sum of our child stabilities traversing up
@@ -313,19 +238,11 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
     it->second.stability               = stability;
     it->second.stability_traversing_up = stability_traversing_up;
 
-    ss << "   Final stability = " << it->second.stability << std::endl;
-    ss << "   Final stability traversing up = "
-       << it->second.stability_traversing_up << std::endl
-       << std::endl;  // debug
-
-    // std::cout << ss.str();
-
     // Update the chain size and stability to this cluster's then move on to the
     // next one
     chain_size                    = it->second.size;
     chain_stability               = it->second.stability;
     chain_stability_traversing_up = it->second.stability_traversing_up;
-    chain_child_id                = it->first;
   }
 
   return chain_num_valid_clusters;
@@ -445,9 +362,6 @@ std::size_t traverse_up_cluster_hierarchy_until_root_chain(
 
         // Send the info of the top cluster to the parent chain
         if (chain.second.parent_chain != root_chain_supernode) {
-          // std::cout << "Chain " << chain_name << " sending to parent "
-          //           << chain.second.parent_chain << "-"
-          //           << chain.second.parent_edge_id << std::endl; // debug
           chain_map_ptr->async_visit(
               chain.second.parent_chain, send_cluster_to_parent_functor(),
               chain_name, chain.second.parent_edge_id,
@@ -460,10 +374,6 @@ std::size_t traverse_up_cluster_hierarchy_until_root_chain(
               chain_name, top_cluster_it->second.size,
               top_cluster_it->second.stability,
               top_cluster_it->second.stability_traversing_up);
-          // std::cout << "Chain " << chain_name
-          //           << " done processing and sent info to root chain cluster
-          //           "
-          //           << chain.second.parent_edge_id << std::endl; // debug
         }
       }
     }
@@ -520,22 +430,11 @@ std::size_t traverse_up_cluster_hierarchy_until_root_chain(
               cluster_name, cluster_info.parent_edge_id, cluster_size,
               cluster_info.stability, cluster_info.stability,
               leaf_cluster_map_ptr, root_chain_cluster_map_ptr);
-          // std::cout << "Leaf cluster " << cluster_name << " sending to
-          // cluster "
-          //           << cluster_info.parent_edge_id << " in chain "
-          //           << cluster_info.parent_chain << ": size = " <<
-          //           cluster_size
-          //           << ", stability = " << cluster_info.stability
-          //           << std::endl; // debug
         } else {
           root_chain_cluster_map_ptr->async_visit(
               cluster_info.parent_edge_id, send_child_to_root_chain_cluster,
               cluster_name, cluster_size, cluster_info.stability,
               cluster_info.stability);
-          // std::cout << "Leaf cluster " << cluster_name
-          //           << " done processing and sent info to root chain cluster
-          //           "
-          //           << cluster_info.parent_edge_id << std::endl; // debug
         }
       };
   leaf_cluster_map.for_all(process_leaf_clusters_lambda);
@@ -545,8 +444,12 @@ std::size_t traverse_up_cluster_hierarchy_until_root_chain(
 }
 
 // Make sure bottom root chain cluster has two children with at least min
-// cluster size
-void make_sure_root_chain_bottom_is_valid(
+// cluster size. We need this assumption for size/stability processing. If this
+// is not true, split off the bottom of the root chain into a separate chain and
+// start from a cluster with two valid children
+// This function also gets the root chain second child info and sets the
+// top cluster of the second root chain child as valid
+void make_sure_root_chain_bottom_is_valid_and_get_second_child(
     ygm::container::map<id_t, root_chain_cluster_info> &root_chain_cluster_map,
     ygm::container::map<id_t, std::vector<edge_id_with_dist_t>>
         &root_chain_cluster_edges_map,
@@ -568,29 +471,30 @@ void make_sure_root_chain_bottom_is_valid(
   static supernode_t root_chain_supernode;
   root_chain_supernode = _root_chain_supernode;
 
-  comm.cout0() << "In the root chain make sure bottom is valid function "
-               << std::endl;  // debug
-
   // Get the root chain second child info and copy it on all ranks
   {
-    id_t       size;
-    distance_t stability, stability_traversing_up;
-    id_t       local_size{0};
-    distance_t local_stability{0.0};
-    distance_t local_stability_traversing_up{0.0};
-    chain_map.async_visit(
-        root_chain_second_child.name,
-        [&local_size, &local_stability, &local_stability_traversing_up](
-            const supernode_t &chain_name,
-            std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
-                &chain) {
-          auto top_cluster_it = chain.first.rbegin();
-          local_size          = top_cluster_it->second.size;
-          local_stability     = top_cluster_it->second.stability;
-          local_stability_traversing_up =
-              top_cluster_it->second.stability_traversing_up;
-        });
+    id_t              size;
+    distance_t        stability, stability_traversing_up;
+    static id_t       local_size;
+    static distance_t local_stability, local_stability_traversing_up;
+    local_size                    = 0;
+    local_stability               = 0.0;
+    local_stability_traversing_up = 0.0;
+    if (comm.rank() == 0) {
+      chain_map.async_visit(
+          root_chain_second_child.name,
+          [](const supernode_t &chain_name,
+             std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
+                 &chain) {
+            auto top_cluster_it = chain.first.rbegin();
+            local_size          = top_cluster_it->second.size;
+            local_stability     = top_cluster_it->second.stability;
+            local_stability_traversing_up =
+                top_cluster_it->second.stability_traversing_up;
+          });
+    }
     comm.barrier();
+
     MPI_Allreduce(&local_size, &size, 1, mpi_id_type(), MPI_MAX,
                   comm.get_mpi_comm());
     MPI_Allreduce(&local_stability, &stability, 1, mpi_distance_type(), MPI_MAX,
@@ -601,8 +505,6 @@ void make_sure_root_chain_bottom_is_valid(
     root_chain_second_child.stability               = stability;
     root_chain_second_child.stability_traversing_up = stability_traversing_up;
   }
-  comm.cout0() << "Done copying over root chain second child info "
-               << std::endl;  // debug
 
   // Check if the bottom root chain cluster is valid, and if not, keep sending
   // sizes and stabilities up the root chain until we get a valid cluster
@@ -613,8 +515,10 @@ void make_sure_root_chain_bottom_is_valid(
                     root_chain_cluster_map_ptr,
         const id_t &cluster_edge_id, root_chain_cluster_info &cluster_info,
         id_t chain_child_size) {
-      std::cout << "Visiting root chain cluster " << cluster_edge_id
-                << std::endl;  // debug
+      // std::cout << "Visiting root chain cluster " << cluster_edge_id
+      //           << " with child size " << cluster_info.child_size
+      //           << " and chain child size = " << chain_child_size
+      //           << std::endl;  // debug
 
       // If this is a valid root chain cluster (both children have min cluster
       // size), set this as the min valid cluster id and stop
@@ -632,9 +536,11 @@ void make_sure_root_chain_bottom_is_valid(
       }
     }
   };
-  root_chain_cluster_map.async_visit(root_chain_min_edge_id,
-                                     walk_up_root_chain_functor(),
-                                     root_chain_second_child.size);
+  if (comm.rank() == 0) {
+    root_chain_cluster_map.async_visit(root_chain_min_edge_id,
+                                       walk_up_root_chain_functor(),
+                                       root_chain_second_child.size);
+  }
   comm.barrier();
 
   // Get the min valid cluster id on each rank
@@ -644,9 +550,6 @@ void make_sure_root_chain_bottom_is_valid(
                 comm.get_mpi_comm());
   static id_t root_chain_min_valid_cluster_id;
   root_chain_min_valid_cluster_id = _root_chain_min_valid_cluster_id;
-
-  comm.cout0() << "Got the min valid cluster id on all ranks"
-               << std::endl;  // debug
 
   // If the min valid cluster id isn't the min cluster id for the root chain,
   // take the chunk of invalid root chain clusters and add them to the chain map
@@ -719,8 +622,6 @@ void make_sure_root_chain_bottom_is_valid(
           root_chain_min_edge_id, get_first_child_lambda, chain_map_ptr);
     }
     comm.barrier();
-
-    comm.cout0() << "Created root chain offshoot chain" << std::endl;  // debug
 
     static std::vector<id_t> local_root_chain_clusters_to_remove;
 
@@ -808,9 +709,6 @@ void make_sure_root_chain_bottom_is_valid(
         chain_map_ptr, root_chain_cluster_edges_map_ptr);
     comm.barrier();
 
-    comm.cout0() << "Done moving invalid clusters to offshoot chain"
-                 << std::endl;  // debug
-
     // Delete the invalid clusters from root_chain_cluster_edges_map
     // after transfering edges
     for (id_t &cluster_edge_id : local_root_chain_clusters_to_remove) {
@@ -819,53 +717,54 @@ void make_sure_root_chain_bottom_is_valid(
     comm.barrier();
     local_root_chain_clusters_to_remove.clear();
 
-    comm.cout0() << "Done deleting extra root chain clusters"
-                 << std::endl;  // debug
-
     // Calculate the size and stability in the root chain offshoot
-    chain_map.async_visit(
-        root_chain_offshoot_supernode,
-        [](const supernode_t &chain_name,
-           std::pair<std::map<id_t, full_cluster_info>, full_chain_info> &chain,
-           ygm::ygm_ptr<ygm::container::map<
-               supernode_t,
-               std::pair<std::map<id_t, full_cluster_info>, full_chain_info>>>
-               chain_map_ptr,
-           ygm::ygm_ptr<
-               ygm::container::map<supernode_t, full_leaf_cluster_info>>
-               leaf_cluster_map_ptr) {
-          calculate_chain_cluster_size_stability_from_children(
-              chain.first, chain.second, min_cluster_size, chain_map_ptr,
-              leaf_cluster_map_ptr);
-        },
-        chain_map_ptr, leaf_cluster_map_ptr);
+    if (comm.rank() == 0) {
+      chain_map.async_visit(
+          root_chain_offshoot_supernode,
+          [](const supernode_t &chain_name,
+             std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
+                 &chain,
+             ygm::ygm_ptr<ygm::container::map<
+                 supernode_t,
+                 std::pair<std::map<id_t, full_cluster_info>, full_chain_info>>>
+                 chain_map_ptr,
+             ygm::ygm_ptr<
+                 ygm::container::map<supernode_t, full_leaf_cluster_info>>
+                 leaf_cluster_map_ptr) {
+            calculate_chain_cluster_size_stability_from_children(
+                chain.first, chain.second, min_cluster_size, chain_map_ptr,
+                leaf_cluster_map_ptr);
+          },
+          chain_map_ptr, leaf_cluster_map_ptr);
+    }
     comm.barrier();
-
-    comm.cout0() << "Done calculating size and stability of offshoot"
-                 << std::endl;  // debug
 
     // Get the corrected root_chain_second_child information
     // Get the root chain second child info and copy it on all ranks
     {
       root_chain_second_child.name = root_chain_offshoot_supernode;
 
-      id_t       size;
-      distance_t stability, stability_traversing_up;
-      id_t       local_size{0};
-      distance_t local_stability{0.0};
-      distance_t local_stability_traversing_up{0.0};
-      chain_map.async_visit(
-          root_chain_second_child.name,
-          [&local_size, &local_stability, &local_stability_traversing_up](
-              const supernode_t &chain_name,
-              std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
-                  &chain) {
-            auto top_cluster_it = chain.first.rbegin();
-            local_size          = top_cluster_it->second.size;
-            local_stability     = top_cluster_it->second.stability;
-            local_stability_traversing_up =
-                top_cluster_it->second.stability_traversing_up;
-          });
+      id_t              size;
+      distance_t        stability, stability_traversing_up;
+      static id_t       local_size;
+      static distance_t local_stability, local_stability_traversing_up;
+      local_size                    = 0;
+      local_stability               = 0.0;
+      local_stability_traversing_up = 0.0;
+      if (comm.rank() == 0) {
+        chain_map.async_visit(
+            root_chain_second_child.name,
+            [&local_size, &local_stability, &local_stability_traversing_up](
+                const supernode_t &chain_name,
+                std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
+                    &chain) {
+              auto top_cluster_it = chain.first.rbegin();
+              local_size          = top_cluster_it->second.size;
+              local_stability     = top_cluster_it->second.stability;
+              local_stability_traversing_up =
+                  top_cluster_it->second.stability_traversing_up;
+            });
+      }
       comm.barrier();
       MPI_Allreduce(&local_size, &size, 1, mpi_id_type(), MPI_MAX,
                     comm.get_mpi_comm());
@@ -878,10 +777,20 @@ void make_sure_root_chain_bottom_is_valid(
       root_chain_second_child.stability_traversing_up = stability_traversing_up;
     }
 
-    comm.cout0() << "Got corrected second root chain child info"
-                 << std::endl;  // debug
-
   }  // End adding to chain map
+
+  // Set the top cluster of the second root chain child as valid
+  if (comm.rank() == 0) {
+    chain_map.async_visit(
+        root_chain_second_child.name,
+        [](const supernode_t &chain_name,
+           std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
+               &chain) {
+          auto it                  = chain.first.rbegin();
+          it->second.valid_cluster = true;
+        });
+  }
+  comm.barrier();
 }
 
 /**
@@ -1065,7 +974,6 @@ void merge_invalid_root_chain_clusters(
     }
   }
   comm.barrier();
-  comm.cout0("Merged root chain clusters in array");  // debug
 
   // Update the root chain cluster map with the new post-merge info
   auto        root_chain_cluster_map_ptr = root_chain_cluster_map.get_ygm_ptr();
@@ -1086,7 +994,6 @@ void merge_invalid_root_chain_clusters(
         });
   }
   comm.barrier();
-  comm.cout0("Updated root chain cluster map with corrected info");  // debug
 
   // Now that we have the final indicies and updated cluster information of the
   // merged root chain clusters, clear the full_root_chain_array to free up
@@ -1210,7 +1117,6 @@ void merge_invalid_root_chain_clusters(
     }
   }
   comm.barrier();
-  comm.cout0("Merged cluster edges");  // debug
 
   // Delete the first child of the merge from clusters to save space (if that
   // child has further children, we don't recurse further)
@@ -1237,7 +1143,6 @@ void merge_invalid_root_chain_clusters(
     }
   }
   comm.barrier();
-  comm.cout0("Cleared child clusters from chain or leaf cluster map");  // debug
 
   // Delete the merge from root chain clusters
   for (auto &[merge_to, vector_of_merge_from] : local_merge_clusters_into_map) {
@@ -1245,7 +1150,6 @@ void merge_invalid_root_chain_clusters(
       root_chain_cluster_map.async_erase(merge_from);
     }
   }
-  comm.cout0("Cleared clusters from root-chain cluster map");  // debug
 
   // Set the children of the post-merged root chain clusters as valid
   auto set_child_cluster_as_valid_lambda =
@@ -1392,12 +1296,12 @@ void update_root_chain_cluster_info(
 }
 
 // Correct any clusters below the top root chain cluster
-int correct_root_chain_stability_traversing_up(
+std::pair<id_t, int> correct_root_chain_stability_traversing_up(
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
               &possible_clusters_for_selection_array,
-    ygm::comm &comm, id_t &selected_root_chain_cluster_edge_id,
-    id_t max_cluster_edge_id) {
-  int num_correction_iterations = 0;
+    ygm::comm &comm, id_t max_cluster_edge_id) {
+  id_t selected_root_chain_cluster_edge_id = 0;
+  int  num_correction_iterations           = 0;
   while (num_correction_iterations <
          possible_clusters_for_selection_array.size()) {
     // Placeholder value larger than any possible edge id in root chain
@@ -1479,7 +1383,8 @@ int correct_root_chain_stability_traversing_up(
     comm.barrier();
   }
 
-  return num_correction_iterations;
+  return std::make_pair(selected_root_chain_cluster_edge_id,
+                        num_correction_iterations);
 }
 
 std::vector<cluster_name_t> traverse_down_hierarchy_and_select_clusters(

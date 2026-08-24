@@ -222,7 +222,17 @@ struct point_cluster_data {
   double lambda_p;
 };
 
-double cal_lambda(const distance_t distance) { return (1.0f / distance); }
+// double cal_lambda(const distance_t distance) { return (1.0f / distance); }
+double cal_lambda(const distance_t distance) {
+  if (distance > 0.0) {
+    return (1.0f / distance);
+  }
+  // Avoid divide by 0 when there's duplicate points (giving distance 0)
+  // Note that HDBSCAN works better if data is deduplicated first
+  else {
+    return std::numeric_limits<double>::max();
+  }
+}
 
 // Assign the cluster to all points in the clusters 'root_edge_id' edge
 // connects.

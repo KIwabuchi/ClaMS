@@ -1,3 +1,6 @@
+#define METALL_DISABLE_CONCURRENCY
+#define METALL_DISABLE_OBJECT_CACHE
+
 #include <unistd.h>
 #include <algorithm>
 #include <cstdlib>
@@ -175,18 +178,62 @@ int main(int argc, char *argv[]) {
   sw_round.reset();
   sw_step.reset();
   if (opt.metall_mst) {
-    // spdlog::info("Attaching MST in Metall datastore");
-    // metall::manager metall_manager(metall::open_read_only,
-    // opt.mst_edges_path); auto           *input_mst_edges =
-    //     metall_manager
-    //         .find<clams::weighted_edge_list_t>(metall::unique_instance)
-    //         .first;
-    // if (!input_mst_edges) {
-    //   spdlog::critical("Failed to find MST edges in Metall datastore at {}",
-    //                    opt.mst_edges_path.string());
-    //   std::abort();
-    // }
-    // spdlog::info("Copying MST edges from Metall datastore");
+    if (world.rank() == 0) {
+      spdlog::info("Attaching MST in Metall datastore");
+    }
+    metall::manager metall_manager(metall::open_read_only, opt.mst_edges_path);
+    auto           *input_mst_edges =
+        metall_manager
+            .find<clams::weighted_edge_list_t>(metall::unique_instance)
+            .first;
+    if (world.rank() == 0) {
+      if (!input_mst_edges) {
+        spdlog::critical("Failed to find MST edges in Metall datastore at {}",
+                         opt.mst_edges_path.string());
+        std::abort();
+      }
+      spdlog::info("Copying MST edges from Metall datastore");
+    }
+
+    uint64_t num_edges  = (*input_mst_edges).size();
+    uint64_t chunk_size = num_edges / world.size() + 1;
+    uint64_t start_idx  = chunk_size * world.rank();
+    uint64_t end_idx =
+        std::min(chunk_size * (world.rank() + 1) - 1, num_edges - 1);
+
+    static std::vector<std::pair<distance_t, std::pair<id_t, id_t>>>
+        mst_edge_vector;
+    mst_edge_vector.clear();
+    for (uint64_t i = start_idx; i <= end_idx; ++i) {
+      std::pair<distance_t, std::pair<id_t, id_t>> array_item =
+          std::make_pair((*input_mst_edges)[i].distance,
+                         std::make_pair((*input_mst_edges)[i].ids[0],
+                                        (*input_mst_edges)[i].ids[1]));
+      mst_edge_vector.push_back(array_item);
+    }
+
+    ygm::container::array<std::pair<distance_t, std::pair<id_t, id_t>>>
+        edge_array(world, mst_edge_vector);
+    world.barrier();
+
+    edge_array.sort();
+    world.barrier();
+
+    auto visit_array_lambda =
+        [&edge_endpoints_map, &edge_contraction_map](
+            const std::size_t                                  &index,
+            const std::pair<distance_t, std::pair<id_t, id_t>> &value) {
+          // Add this edge to the edge map with its sorted position as its id
+          distance_t            distance       = value.first;
+          std::pair<id_t, id_t> edge_endpoints = value.second;
+          edge_endpoints_map.async_insert(index, edge_endpoints);
+          edge_contraction_map.async_insert(
+              index,
+              edge_contraction_info{.endpoint_supernode_reps = edge_endpoints,
+                                    .distance                = distance});
+        };
+    edge_array.for_all(visit_array_lambda);
+    world.barrier();
 
     // std::cout << "Rank " << world.rank()
     //           << " input size = " << (*input_mst_edges).size() << std::endl;
@@ -196,7 +243,7 @@ int main(int argc, char *argv[]) {
     //                             (*input_mst_edges)[i].ids[1])
     //           << " " << (*input_mst_edges)[i].distance << std::endl;
 
-    return EXIT_SUCCESS;
+    // return EXIT_SUCCESS;
 
   } else {
     if (opt.read_mst_with_edge_ids) {
@@ -238,6 +285,23 @@ int main(int argc, char *argv[]) {
     spdlog::info(" Time to ingest MST edges (s): {:.3f}", sw_round);
   }
 
+  if (edge_endpoints_map.size() == 0) {
+    if (world.rank() == 0) {
+      spdlog::info("Error: 0 MST edges read");
+      show_help();
+    }
+    std::exit(EXIT_FAILURE);
+  }
+
+  // // Print edges as debug sanity check
+  // auto print_edges_lambda = [](const id_t                  &edge_id,
+  //                              const edge_contraction_info &edge_info) {
+  //   std::cout << edge_id << ": " << edge_info.endpoint_supernode_reps << ", "
+  //             << edge_info.distance << std::endl;
+  // };
+  // edge_endpoints_map.for_all(print_edges_lambda);
+  // world.barrier();
+
   /* Initial set up of needed YGM maps */
 
   // Map of supernode children of edges in the dendrogram
@@ -270,7 +334,8 @@ int main(int argc, char *argv[]) {
     fill_init_min_incident_edge_map(min_incident_edge_map, edge_endpoints_map);
     incidence_map_time += sw_step.elapsed().count();
 
-    // Max possible number of contraction rounds is log2(number of edges in MST)
+    // Max possible number of contraction rounds is log2(number of edges in
+    // MST)
     uint32_t max_possible_rounds =
         static_cast<int>(std::ceil(std::log2(edge_endpoints_map.size())));
 
@@ -319,12 +384,14 @@ int main(int argc, char *argv[]) {
       update_parent_time += sw_step.elapsed().count();
       sw_step.reset();
 
-      // clear the min incident edge map since we're done with it for this round
+      // clear the min incident edge map since we're done with it for this
+      // round
       id_t num_nodes_at_start_of_round = min_incident_edge_map.size();
       min_incident_edge_map.clear();
       world.barrier();
 
-      // Get the supernodes (connected components) for this round of contraction
+      // Get the supernodes (connected components) for this round of
+      // contraction
       sw_step.reset();
       tree_components_djset.all_compress();
       world.barrier();
@@ -359,18 +426,19 @@ int main(int argc, char *argv[]) {
       sw_step.reset();
 
       // Update the edge info: the edge endpoints and chain supernode
-      // Fill the keys of the min incident edge map with the new supernode reps
+      // Fill the keys of the min incident edge map with the new supernode
+      // reps
 
-      // To avoid bottleneck of lookups from a small number of supernodes, if we
-      // have few enough new supernodes, create a local copy of
+      // To avoid bottleneck of lookups from a small number of supernodes, if
+      // we have few enough new supernodes, create a local copy of
       // tree_components_djset to update edge info
       if (tree_components_djset.num_sets() <=
           LOCAL_COPY_NUM_SUPERNODES_THRESHOLD) {
         update_edge_endpoints_and_chain_supernode_from_local_map(
             round, edge_contraction_map, tree_components_djset);
       }
-      // Otherwise, avoid creating local copies and look up new edge info in the
-      // supernode_map
+      // Otherwise, avoid creating local copies and look up new edge info in
+      // the supernode_map
       else {
         update_edge_endpoints_and_chain_supernode(round, edge_contraction_map,
                                                   tree_components_djset);
@@ -449,9 +517,9 @@ int main(int argc, char *argv[]) {
   {
     // Initial setup for this phase
 
-    // Local vector of root chain alpha-edges. We will later use this to fill a
-    // YGM array to avoid bottlenecks processing the root chain, which we expect
-    // to be the longest
+    // Local vector of root chain alpha-edges. We will later use this to fill
+    // a YGM array to avoid bottlenecks processing the root chain, which we
+    // expect to be the longest
     std::vector<edge_id_with_dist_t> local_root_chain_alpha_edges;
 
     // YGM set of root chain non-alpha edges
@@ -600,6 +668,8 @@ int main(int argc, char *argv[]) {
       root_chain_second_child_supernode = fill_missing_root_chain_cluster_info(
           full_root_chain_cluster_array, alpha_edge_map,
           root_chain_cluster_edges_map);
+      root_chain_second_child.name = root_chain_second_child_supernode;
+
       alpha_edge_map.clear();
 
       // Get the min edge id for the root chain
@@ -613,20 +683,6 @@ int main(int argc, char *argv[]) {
       world.barrier();
       MPI_Allreduce(&local_root_chain_min_edge_id, &root_chain_min_edge_id, 1,
                     mpi_id_type(), MPI_MAX, world.get_mpi_comm());
-
-      // Broadcast the root chain second child supernode so all ranks have the
-      // right value - id_t, uint32_t
-      id_t     local_first  = root_chain_second_child_supernode.first;
-      uint32_t local_second = root_chain_second_child_supernode.second;
-      id_t     global_first;
-      uint32_t global_second;
-      MPI_Allreduce(&local_first, &global_first, 1, mpi_id_type(), MPI_MAX,
-                    world.get_mpi_comm());
-      MPI_Allreduce(&local_second, &global_second, 1, MPI_UINT32_T, MPI_MAX,
-                    world.get_mpi_comm());
-      root_chain_second_child_supernode =
-          std::make_pair(global_first, global_second);
-      root_chain_second_child.name = root_chain_second_child_supernode;
 
       fill_initial_cluster_info_time += sw_step.elapsed().count();
       sw_step.reset();
@@ -695,7 +751,8 @@ int main(int argc, char *argv[]) {
       spdlog::info("   Time to assign edges to chains (s): {:.3f}",
                    assign_edges_to_chains_time);
       spdlog::info(
-          "   Time to assign round-1 contracted edges to clusters (s): {:.3f}",
+          "   Time to assign round-1 contracted edges to clusters (s): "
+          "{:.3f}",
           assign_contracted_edges_to_clusters_time);
       spdlog::info(
           "   Time to fill missing cluster information (birth "
@@ -712,7 +769,6 @@ int main(int argc, char *argv[]) {
 
   // Initialize map of point id -> cluster id
   ygm::container::map<id_t, cluster_id_t> point_to_cluster_id_map(world);
-  // auto point_to_cluster_id_map_ptr = point_to_cluster_id_map.get_ygm_ptr();
 
   {
     // Set up variables used through out Phase 3
@@ -746,68 +802,15 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    // TODO - make sure that the bottom two root chain children are valid with
-    // at least min cluster size
-    {
-      // world.cout0() << "Before make sure root chain " << std::endl;
-      // make_sure_root_chain_bottom_is_valid(
-      //     root_chain_cluster_map, root_chain_cluster_edges_map, chain_map,
-      //     leaf_cluster_map, root_chain_min_edge_id, root_chain_second_child,
-      //     min_cluster_size, root_chain_supernode);
-
-      // Set the top cluster of the second root chain child as valid
-      if (world.rank() == 0) {
-        std::cout << "Root chain second child is "
-                  << root_chain_second_child.name << std::endl;
-        chain_map.async_visit(
-            root_chain_second_child.name,
-            [](const supernode_t &chain_name,
-               std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
-                   &chain) {
-              std::cout << "Visiting " << chain_name << " with "
-                        << chain.first.size() << " clusters"
-                        << std::endl;  // debug
-              auto it                  = chain.first.rbegin();
-              it->second.valid_cluster = true;
-            });
-      }
-      world.barrier();
-
-      // Get the root chain second child info and copy it on all ranks
-      id_t              size;
-      distance_t        stability, stability_traversing_up;
-      static id_t       local_size{0};
-      static distance_t local_stability{0.0};
-      static distance_t local_stability_traversing_up{0.0};
-      if (world.rank() == 0) {
-        chain_map.async_visit(
-            root_chain_second_child.name,
-            [](const supernode_t &chain_name,
-               std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
-                   &chain) {
-              auto top_cluster_it = chain.first.rbegin();
-              local_size          = top_cluster_it->second.size;
-              local_stability     = top_cluster_it->second.stability;
-              local_stability_traversing_up =
-                  top_cluster_it->second.stability_traversing_up;
-              std::cout << "Root chain second child: size = " << local_size
-                        << ", stability = " << local_stability
-                        << " stability_traversing up = "
-                        << local_stability_traversing_up << std::endl;
-            });
-      }
-      world.barrier();
-
-      MPI_Allreduce(&local_size, &size, 1, mpi_id_type(), MPI_MAX,
-                    world.get_mpi_comm());
-      MPI_Allreduce(&local_stability, &stability, 1, mpi_distance_type(),
-                    MPI_MAX, world.get_mpi_comm());
-      MPI_Allreduce(&local_stability_traversing_up, &stability_traversing_up, 1,
-                    mpi_distance_type(), MPI_MAX, world.get_mpi_comm());
-      root_chain_second_child.size                    = size;
-      root_chain_second_child.stability               = stability;
-      root_chain_second_child.stability_traversing_up = stability_traversing_up;
-    }
+    // Make sure that the bottom two root chain children are valid with
+    // at least min cluster size. We need this assumption to process merging
+    // invalid root chain clusters and then propagating size/stability
+    // This function also gets the root chain second child info and sets the
+    // top cluster of the second root chain child as valid
+    make_sure_root_chain_bottom_is_valid_and_get_second_child(
+        root_chain_cluster_map, root_chain_cluster_edges_map, chain_map,
+        leaf_cluster_map, root_chain_min_edge_id, root_chain_second_child,
+        min_cluster_size, root_chain_supernode);
 
     // Merge invalid root chain clusters
     {
@@ -857,11 +860,11 @@ int main(int argc, char *argv[]) {
 
     // Track whether we have selected a root chain cluster in our flat
     // clustering and if so, which one
-    // bool selected_cluster_in_root_chain = false;
-    id_t selected_root_chain_cluster_edge_id = 0;
+    static id_t selected_root_chain_cluster_edge_id;
+    selected_root_chain_cluster_edge_id = 0;
 
-    // Initialize and sort a YGM array for the merged root chain clusters we
-    // keep
+    // Initialize and sort a YGM array for the valid (post-merging) root chain
+    // clusters we kept
     std::vector<std::pair<id_t, root_chain_cluster_info>>
         local_root_chain_clusters;
     root_chain_cluster_map.for_all(
@@ -894,81 +897,18 @@ int main(int argc, char *argv[]) {
     if (world.rank() == 0 && opt.verbose) {
       spdlog::info("  Number of valid root chain clusters: {}",
                    num_root_chain_clusters);
-      spdlog::info("  Edge id for the bottom root chain cluster: {}",
-                   root_chain_min_edge_id);
+      // spdlog::info("  Edge id for the bottom root chain cluster: {}",
+      //              root_chain_min_edge_id);
     }
-    // Each root chain cluster now has 2 valid children - the bottom root chain
-    // cluster has two valid chain-cluster children, and all other root-chain
-    // clusters have one root chain cluster and one other-chain cluster
-    // Also include the very top root chain cluster as valid
+    // Each root chain cluster now has 2 valid children - the bottom root
+    // chain cluster has two valid chain-cluster children, and all other
+    // root-chain clusters have one root chain cluster and one other-chain
+    // cluster Also include the very top root chain cluster as valid
     num_valid_clusters += 2 * num_root_chain_clusters + 1;
 
     if (world.rank() == 0) {
       spdlog::info("  Number of valid unflattened clusters: {}",
                    num_valid_clusters);
-    }
-
-    // DEBUG
-    {
-      // Try recalculating the number of valid clusters by checking all clusters
-      static id_t temp_num_leaf_clusters                = 0;
-      static id_t temp_num_chain_clusters               = 0;
-      static id_t temp_num_valid_leaf_clusters          = 0;
-      static id_t temp_num_valid_chain_clusters         = 0;
-      static id_t temp_num_chain_clusters_without_child = 0;
-
-      leaf_cluster_map.for_all([](const supernode_t            &cluster_name,
-                                  const full_leaf_cluster_info &cluster_info) {
-        ++temp_num_leaf_clusters;
-        if (cluster_info.valid_cluster) {
-          ++temp_num_valid_leaf_clusters;
-        }
-      });
-      world.barrier();
-
-      chain_map.for_all([](const supernode_t                &chain_name,
-                           const std::pair<std::map<id_t, full_cluster_info>,
-                                           full_chain_info> &chain) {
-        temp_num_chain_clusters += chain.first.size();
-        for (const auto &[cluster_edge_id, cluster_info] : chain.first) {
-          if (cluster_info.valid_cluster) {
-            ++temp_num_valid_chain_clusters;
-          }
-          if (cluster_info.child == BLANK_SUPERNODE) {
-            ++temp_num_chain_clusters_without_child;
-          }
-        }
-      });
-      world.barrier();
-
-      world.cout0() << "leaf_cluster_map.size = " << leaf_cluster_map.size()
-                    << std::endl;
-      world.cout0() << "Number of leaf clusters: "
-                    << ygm::sum(temp_num_leaf_clusters, world) << std::endl;
-      world.cout0() << "Number of valid leaf clusters: "
-                    << ygm::sum(temp_num_valid_leaf_clusters, world)
-                    << std::endl;
-      world.cout0() << "chain_map.size = " << chain_map.size() << std::endl;
-      world.cout0() << "Number of chain clusters not in root chain: "
-                    << ygm::sum(temp_num_chain_clusters, world) << std::endl;
-      world.cout0() << "Number of valid chain clusters: "
-                    << ygm::sum(temp_num_valid_chain_clusters, world)
-                    << std::endl;
-      world.cout0() << "Number of chain clusters found without child: "
-                    << ygm::sum(temp_num_chain_clusters_without_child, world)
-                    << std::endl;
-      world.cout0() << "root_chain_cluster_map.size = "
-                    << root_chain_cluster_map.size() << std::endl;
-      world.cout0() << "Total number of clusters: "
-                    << ygm::sum(temp_num_leaf_clusters, world) +
-                           ygm::sum(temp_num_chain_clusters, world) +
-                           root_chain_cluster_map.size()
-                    << std::endl;
-      world.cout0() << "Total number of valid clusters: "
-                    << ygm::sum(temp_num_valid_leaf_clusters, world) +
-                           ygm::sum(temp_num_valid_chain_clusters, world) +
-                           root_chain_cluster_map.size()
-                    << std::endl;
     }
 
     if (num_root_chain_clusters > 0) {
@@ -1041,10 +981,10 @@ int main(int argc, char *argv[]) {
         MPI_Allreduce(MPI_IN_PLACE, &max_cluster_edge_id, 1, mpi_id_type(),
                       MPI_MAX, world.get_mpi_comm());
 
-        int num_correction_iterations =
-            correct_root_chain_stability_traversing_up(
-                possible_clusters_for_selection_array, world,
-                selected_root_chain_cluster_edge_id, max_cluster_edge_id);
+        auto correction_result = correct_root_chain_stability_traversing_up(
+            possible_clusters_for_selection_array, world, max_cluster_edge_id);
+        selected_root_chain_cluster_edge_id = correction_result.first;
+        int num_correction_iterations       = correction_result.second;
 
         // Update the corrected root chain stability_traversing_up
         auto update_stability_traversing_up_lambda =
@@ -1068,6 +1008,10 @@ int main(int argc, char *argv[]) {
               "stabilities: {}",
               num_correction_iterations);
           spdlog::info(
+              "  Root chain cluster with edge id {} selected as a "
+              "flat cluster",
+              selected_root_chain_cluster_edge_id);
+          spdlog::info(
               "     Time to correct root chain cluster stabilities "
               "(s): {:.3f}",
               sw_step);
@@ -1079,12 +1023,6 @@ int main(int argc, char *argv[]) {
     // at this point
     root_chain_array.clear();
     world.barrier();
-
-    // Send from rank 0 to everyone to see if we selected (i.e.,
-    // selected_root_chain_cluster_edge_id > 0) a root chain cluster as a
-    // final flat cluster
-    MPI_Bcast(&selected_root_chain_cluster_edge_id, 1, mpi_id_type(), 0,
-              world.get_mpi_comm());
 
     calculate_root_chain_size_stability_time += sw_round.elapsed().count();
 
@@ -1312,8 +1250,6 @@ int main(int argc, char *argv[]) {
                                        root_chain_cluster_map, chain_map,
                                        leaf_cluster_map, root_chain_supernode);
 
-      world.cout0() << "valid_cluster_map.size() = " << valid_cluster_map.size()
-                    << std::endl;
       if (world.rank() == 0 && opt.verbose) {
         spdlog::info("  Time to filter and keep valid clusters only(s): {:.3f}",
                      sw_step);

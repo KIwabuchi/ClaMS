@@ -20,8 +20,14 @@
 
 namespace clams::clustering {
 
-// Move the required information for alpha edges over from the edge contraction
-// map so we can clear it and save space
+/**
+ * @brief Move the required information for alpha edges over from the edge
+ * contraction map so we can clear it and save space
+ *
+ * @param alpha_edge_map An empty YGM map of alpha edge id -> alpha edge info.
+ * @param edge_contraction_map YGM map of edge id -> edge contraction info.
+ * @param root_chain_supernode Supernode name for the root chain.
+ */
 void fill_alpha_edge_map(
     ygm::container::map<id_t, alpha_edge_info>       &alpha_edge_map,
     ygm::container::map<id_t, edge_contraction_info> &edge_contraction_map,
@@ -49,6 +55,25 @@ void fill_alpha_edge_map(
   comm.barrier();
 }
 
+/**
+ * @brief Goes through the edge contraction map and assigns all edges to chains,
+ * represented by their supernode.
+ *
+ * @param edge_contraction_map YGM map of edge id -> edge contraction info.
+ * @param chain_map An empty YGM map of chain name (supernode) -> pair of
+ * (cluster map, chain info). The cluster map goes from edge id -> full cluster
+ * info, and the chain info stores the required chain info that doesn't go in
+ * the cluster map.
+ * @param local_root_chain_alpha_edges An empty vector to hold alpha edges found
+ * on this rank that belong to the root chain.
+ * @param root_chain_non_alpha_edge_set An empty YGM set to store root chain
+ * non-alpha edges.
+ * @param leaf_cluster_map An empty YGM map to hold leaf clusters (clusters that
+ * have no child clusters when disregarding min_cluster_size). Map of cluster
+ * supernode -> leaf cluster info.
+ * @param final_round The integer final round of MST contraction. We use this to
+ * tell which edges belong to the root chain.
+ */
 void assign_edges_to_chains(
     ygm::container::map<id_t, edge_contraction_info> &edge_contraction_map,
     ygm::container::map<supernode_t,
@@ -141,6 +166,13 @@ void assign_edges_to_chains(
   comm.barrier();
 }
 
+/**
+ * @brief Assign non-alpha edges that belong to chains to their cluster.
+ *
+ * @param chain_map YGM map of chain name (supernode) -> pair of
+ * (cluster map, chain info). The non-alpha edges are in chain info and get
+ * moved to the edges vector of their cluster in the cluster map.
+ */
 void assign_non_alpha_edges_to_clusters(
     ygm::container::map<supernode_t,
                         std::pair<std::map<id_t, full_cluster_info>,
@@ -196,8 +228,18 @@ void assign_non_alpha_edges_to_clusters(
   comm.barrier();
 }
 
-// Send the root chain non-alpha edges to the appropriate rank for
-// processing
+/**
+ * @brief Send the root chain non-alpha edges to the appropriate rank for
+ * processing.
+ *
+ * @param comm YGM comm.
+ * @param full_root_chain_cluster_array Sorted YGM array containing pairs of
+ * (edge id, root chain cluster info).
+ * @param root_chain_non_alpha_edge_set YGM set containing non-alpha edges that
+ * belong to the root chain.
+ *
+ * @return A vector of root chain non-alpha edges to process on your rank.
+ */
 std::vector<edge_id_with_dist_t> split_root_chain_non_alpha_edges_to_process(
     ygm::comm &comm,
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
@@ -312,7 +354,16 @@ std::vector<edge_id_with_dist_t> split_root_chain_non_alpha_edges_to_process(
   return root_chain_non_alpha_edges;
 }
 
-// Assign root-chain non-alpha edges to their clusters
+/**
+ * @brief Assign root-chain non-alpha edges to their clusters.
+ *
+ * @param root_chain_non_alpha_edge_set YGM set containing non-alpha edges that
+ * belong to the root chain.
+ * @param full_root_chain_cluster_array Sorted YGM array containing pairs of
+ * (edge id, root chain cluster info).
+ * @param root_chain_cluster_edges_map A YGM map of root chain cluster edge id
+ * -> edges added to that cluster.
+ */
 void assign_root_chain_non_alpha_edges_to_clusters(
     std::vector<edge_id_with_dist_t> &root_chain_non_alpha_edges,
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
@@ -368,8 +419,13 @@ void assign_root_chain_non_alpha_edges_to_clusters(
   comm.barrier();
 }
 
-// Process the clusters in the chain map and and fill in missing
-// information on birth distance, parent, children
+/**
+ * @brief Process the clusters in the chain map and and fill in missing
+ * information on birth distance, parent, children.
+ *
+ * @param chain_map YGM map of chain name -> (cluster map, chain info)
+ * @param alpha_edge_map YGM map of alpha edge id -> alpha edge info.
+ */
 void fill_missing_non_root_chain_cluster_info(
     ygm::container::map<supernode_t,
                         std::pair<std::map<id_t, full_cluster_info>,
@@ -514,8 +570,13 @@ void fill_missing_non_root_chain_cluster_info(
   comm.barrier();
 }
 
-// Process the leaf cluster map and fill in missing
-// information on birth distance and parent
+/**
+ * @brief Process the leaf cluster map and fill in missing
+ * information on birth distance and parent.
+ *
+ * @param leaf_cluster_map YGM map of leaf cluster name -> leaf cluster info
+ * @param alpha_edge_map YGM map of alpha edge id -> alpha edge info.
+ */
 void fill_missing_leaf_cluster_info(
     ygm::container::map<supernode_t, full_leaf_cluster_info> &leaf_cluster_map,
     ygm::container::map<id_t, alpha_edge_info>               &alpha_edge_map) {
@@ -555,6 +616,18 @@ void fill_missing_leaf_cluster_info(
 
 // Split the root chain into clusters at its alpha edges
 // Return root_chain_second_child_supernode
+
+/**
+ * @brief Process the root chain clusters map and fill in missing
+ * information on birth distance, parent, and children.
+ *
+ * @param full_root_chain_cluster_array Sorted YGM array of (edge_id, cluster
+ * info) for root chain clusters.
+ * @param alpha_edge_map YGM map of alpha edge id -> alpha edge info.
+ * @return The second child supernode of the bottom root chain cluster. There
+ * isn't a good place to store this information in the root chain map, so we
+ * handle it separately and make sure all ranks get a copy.
+ */
 supernode_t fill_missing_root_chain_cluster_info(
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
                                                &full_root_chain_cluster_array,

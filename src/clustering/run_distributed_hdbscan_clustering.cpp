@@ -57,7 +57,7 @@ void show_help() {
          "  -o <path> Path to clustering output.\n"
          "  -m <int>  Min cluster size parameter in HDBSCAN.\n"
          "Optional arguments:\n"
-         "  -M If specified, input is Metall datastore.\n"
+         "  -M If specified, input MST is Metall datastore.\n"
          "  -e If specified, read MST file with edge ids included. This option "
          "only works for text file MST input, not Metall input.\n"
          "  -c <path> Path to detailed clustering data output.\n"
@@ -75,8 +75,11 @@ void show_help() {
 // i: input mst edge list directory
 // o: output directory
 // m: minimum cluster size
-void parse_option(int argc, char *argv[], option &opt) {
-  int opt_char;
+std::pair<bool, std::vector<int>> parse_option(int argc, char *argv[],
+                                               option &opt) {
+  bool             show_help = false;
+  std::vector<int> unknown_opts;
+  int              opt_char;
   while ((opt_char = getopt(argc, argv, "i:o:m:c:n:Mevh")) != -1) {
     switch (opt_char) {
       case 'i':
@@ -104,21 +107,32 @@ void parse_option(int argc, char *argv[], option &opt) {
         opt.verbose = true;
         break;
       case 'h':
-        show_help();
+        show_help = true;
         std::exit(EXIT_SUCCESS);
       default:
-        spdlog::critical("Unknown option: {}\n", opt_char);
-        show_help();
-        std::exit(EXIT_FAILURE);
+        unknown_opts.push_back(opt_char);
+        show_help = true;
+        // std::exit(EXIT_FAILURE);
     }
   }
+
+  return std::make_pair(show_help, unknown_opts);
 }
 
 int main(int argc, char *argv[]) {
   ygm::comm world(&argc, &argv);
 
   option opt;
-  parse_option(argc, argv, opt);
+  auto   parse_return = parse_option(argc, argv, opt);
+  if ((parse_return.first) & world.rank() == 0) {
+    if (parse_return.second.size() > 0) {
+      for (int opt_char : parse_return.second) {
+        spdlog::critical("Ignoring unknown option: {:c}\n", opt_char);
+      }
+    }
+    show_help();
+  }
+
   if (opt.num_files_to_output == 0) {
     opt.num_files_to_output = world.size();
   } else if (world.size() < opt.num_files_to_output) {
@@ -212,38 +226,18 @@ int main(int argc, char *argv[]) {
       mst_edge_vector.push_back(array_item);
     }
 
-    ygm::container::array<std::pair<distance_t, std::pair<id_t, id_t>>>
-        edge_array(world, mst_edge_vector);
-    world.barrier();
+    if ((world.rank() == 0) & (opt.verbose)) {
+      spdlog::info("  Time to read edges (s): {:.3f}", sw_step);
+    }
+    sw_step.reset();
 
-    edge_array.sort();
-    world.barrier();
+    sort_and_process_mst_edges_into_maps(mst_edge_vector, edge_endpoints_map,
+                                         edge_contraction_map);
 
-    auto visit_array_lambda =
-        [&edge_endpoints_map, &edge_contraction_map](
-            const std::size_t                                  &index,
-            const std::pair<distance_t, std::pair<id_t, id_t>> &value) {
-          // Add this edge to the edge map with its sorted position as its id
-          distance_t            distance       = value.first;
-          std::pair<id_t, id_t> edge_endpoints = value.second;
-          edge_endpoints_map.async_insert(index, edge_endpoints);
-          edge_contraction_map.async_insert(
-              index,
-              edge_contraction_info{.endpoint_supernode_reps = edge_endpoints,
-                                    .distance                = distance});
-        };
-    edge_array.for_all(visit_array_lambda);
-    world.barrier();
-
-    // std::cout << "Rank " << world.rank()
-    //           << " input size = " << (*input_mst_edges).size() << std::endl;
-    // int i = world.rank();
-    // std::cout << "Rank " << world.rank() << " edge info: "
-    //           << std::make_pair((*input_mst_edges)[i].ids[0],
-    //                             (*input_mst_edges)[i].ids[1])
-    //           << " " << (*input_mst_edges)[i].distance << std::endl;
-
-    // return EXIT_SUCCESS;
+    if ((world.rank() == 0) & (opt.verbose)) {
+      spdlog::info("  Time to sort edges and fill YGM maps (s): {:.3f}",
+                   sw_step);
+    }
 
   } else {
     if (opt.read_mst_with_edge_ids) {
@@ -253,10 +247,33 @@ int main(int argc, char *argv[]) {
         spdlog::info("Reading edges from: {}", opt.mst_edges_path.string());
       }
 
-      std::vector<std::string> mst_file_vector{opt.mst_edges_path.c_str()};
+      std::vector<std::string> input_paths{opt.mst_edges_path.c_str()};
+      ygm::io::line_parser     mst_line_parser(world, input_paths);
 
-      read_mst_edges_with_id_into_edge_maps(mst_file_vector, edge_endpoints_map,
-                                            edge_contraction_map);
+      auto line_parser_lambda = [&edge_endpoints_map, &edge_contraction_map](
+                                    const std::string &line) {
+        if (std::isdigit(line[0])) {
+          try {
+            std::stringstream ss(line);
+            id_t              edge_id;
+            id_t              node1, node2;
+            distance_t        dist;
+            ss >> edge_id >> node1 >> node2 >> dist;
+            std::pair<id_t, id_t> edge_endpoints = std::make_pair(node1, node2);
+            edge_endpoints_map.async_insert(edge_id, edge_endpoints);
+            edge_contraction_map.async_insert(
+                edge_id,
+                edge_contraction_info{.endpoint_supernode_reps = edge_endpoints,
+                                      .distance                = dist});
+
+          } catch (...) {
+            std::cout << "Error reading mst line: " << line << std::endl;
+          }
+        } else {
+          std::cout << "Read comment line in mst file: " << line << std::endl;
+        }
+      };
+      mst_line_parser.for_all(line_parser_lambda);
       world.barrier();
 
     } else {
@@ -265,16 +282,46 @@ int main(int argc, char *argv[]) {
         spdlog::info("Reading edges from: {}", opt.mst_edges_path.string());
       }
 
-      std::vector<std::string> mst_file_vector{opt.mst_edges_path.c_str()};
+      std::vector<std::string> input_paths{opt.mst_edges_path.c_str()};
+      ygm::io::line_parser     mst_line_parser(world, input_paths);
 
-      std::array<float, 3> time_arr = read_mst_edges_into_edge_maps(
-          mst_file_vector, edge_endpoints_map, edge_contraction_map);
+      // Vector to store mst edges read by this rank
+      // Edges stored in the form (distance, endpoint pair (node 1, node2))
+      static std::vector<std::pair<distance_t, std::pair<id_t, id_t>>>
+          mst_edge_vector;
+      mst_edge_vector.clear();
+
+      auto line_parser_lambda = [](const std::string &line) {
+        if (std::isdigit(line[0])) {
+          try {
+            std::stringstream ss(line);
+            id_t              node1, node2;
+            distance_t        dist;
+            ss >> node1 >> node2 >> dist;
+            std::pair<distance_t, std::pair<id_t, id_t>> array_item =
+                std::make_pair(dist, std::make_pair(node1, node2));
+            mst_edge_vector.push_back(array_item);
+          } catch (...) {
+            std::cout << "Error reading mst line: " << line << std::endl;
+          }
+        } else {
+          std::cout << "Read comment line in mst file: " << line << std::endl;
+        }
+      };
+      mst_line_parser.for_all(line_parser_lambda);
       world.barrier();
 
-      if (opt.verbose) {
-        spdlog::info("   Time to read edges (s): {:.3f}", time_arr[0]);
-        spdlog::info("   Time to sort edges (s): {:.3f}", time_arr[1]);
-        spdlog::info("   Time to add edges to map (s): {:.3f}", time_arr[2]);
+      if ((world.rank() == 0) & (opt.verbose)) {
+        spdlog::info("  Time to read edges (s): {:.3f}", sw_step);
+      }
+      sw_step.reset();
+
+      sort_and_process_mst_edges_into_maps(mst_edge_vector, edge_endpoints_map,
+                                           edge_contraction_map);
+
+      if ((world.rank() == 0) & (opt.verbose)) {
+        spdlog::info("  Time to sort edges and fill YGM maps (s): {:.3f}",
+                     sw_step);
       }
     }
   }
@@ -292,15 +339,6 @@ int main(int argc, char *argv[]) {
     }
     std::exit(EXIT_FAILURE);
   }
-
-  // // Print edges as debug sanity check
-  // auto print_edges_lambda = [](const id_t                  &edge_id,
-  //                              const edge_contraction_info &edge_info) {
-  //   std::cout << edge_id << ": " << edge_info.endpoint_supernode_reps << ", "
-  //             << edge_info.distance << std::endl;
-  // };
-  // edge_endpoints_map.for_all(print_edges_lambda);
-  // world.barrier();
 
   /* Initial set up of needed YGM maps */
 
@@ -673,13 +711,15 @@ int main(int argc, char *argv[]) {
       alpha_edge_map.clear();
 
       // Get the min edge id for the root chain
-      id_t local_root_chain_min_edge_id = 0;
-      full_root_chain_cluster_array.async_visit(
-          0, [&local_root_chain_min_edge_id](
-                 [[maybe_unused]] const id_t              &index,
-                 std::pair<id_t, root_chain_cluster_info> &value) {
-            local_root_chain_min_edge_id = value.first;
-          });
+      static id_t local_root_chain_min_edge_id;
+      local_root_chain_min_edge_id = 0;
+      if (world.rank() == 0) {
+        full_root_chain_cluster_array.async_visit(
+            0, []([[maybe_unused]] const id_t              &index,
+                  std::pair<id_t, root_chain_cluster_info> &value) {
+              local_root_chain_min_edge_id = value.first;
+            });
+      }
       world.barrier();
       MPI_Allreduce(&local_root_chain_min_edge_id, &root_chain_min_edge_id, 1,
                     mpi_id_type(), MPI_MAX, world.get_mpi_comm());
@@ -881,24 +921,10 @@ int main(int argc, char *argv[]) {
     world.barrier();
     local_root_chain_clusters.clear();
 
-    // Get the min edge id for the root chain
-    id_t local_root_chain_min_edge_id = 0;
-    root_chain_array.async_visit(
-        0, [&local_root_chain_min_edge_id](
-               [[maybe_unused]] const id_t              &index,
-               std::pair<id_t, root_chain_cluster_info> &value) {
-          local_root_chain_min_edge_id = value.first;
-        });
-    world.barrier();
-    MPI_Allreduce(&local_root_chain_min_edge_id, &root_chain_min_edge_id, 1,
-                  mpi_id_type(), MPI_MAX, world.get_mpi_comm());
-
     id_t num_root_chain_clusters = root_chain_array.size();
     if (world.rank() == 0 && opt.verbose) {
       spdlog::info("  Number of valid root chain clusters: {}",
                    num_root_chain_clusters);
-      // spdlog::info("  Edge id for the bottom root chain cluster: {}",
-      //              root_chain_min_edge_id);
     }
     // Each root chain cluster now has 2 valid children - the bottom root
     // chain cluster has two valid chain-cluster children, and all other
@@ -916,6 +942,20 @@ int main(int argc, char *argv[]) {
 
       root_chain_array.sort();
       world.barrier();
+
+      // Get the min edge id for the root chain
+      static id_t local_root_chain_min_edge_id;
+      local_root_chain_min_edge_id = 0;
+      if (world.rank() == 0) {
+        root_chain_array.async_visit(
+            0, []([[maybe_unused]] const id_t              &index,
+                  std::pair<id_t, root_chain_cluster_info> &value) {
+              local_root_chain_min_edge_id = value.first;
+            });
+      }
+      world.barrier();
+      MPI_Allreduce(&local_root_chain_min_edge_id, &root_chain_min_edge_id, 1,
+                    mpi_id_type(), MPI_MAX, world.get_mpi_comm());
 
       // Get cluster size, stability, and stability_traversing_up for root
       // chain by processing each chunk of the root chain array locally and
@@ -967,13 +1007,13 @@ int main(int argc, char *argv[]) {
         world.barrier();
 
         // Get the max cluster edge id
-        id_t max_cluster_edge_id = 0;
+        static id_t max_cluster_edge_id;
+        max_cluster_edge_id = 0;
         if (world.rank() == 0) {
           root_chain_array.async_visit(
               num_root_chain_clusters - 1,
-              [&max_cluster_edge_id](
-                  [[maybe_unused]] const id_t              &index,
-                  std::pair<id_t, root_chain_cluster_info> &value) {
+              []([[maybe_unused]] const id_t              &index,
+                 std::pair<id_t, root_chain_cluster_info> &value) {
                 max_cluster_edge_id = value.first;
               });
         }
@@ -1008,11 +1048,11 @@ int main(int argc, char *argv[]) {
               "stabilities: {}",
               num_correction_iterations);
           spdlog::info(
-              "  Root chain cluster with edge id {} selected as a "
+              "   Root chain cluster with edge id {} selected as a "
               "flat cluster",
               selected_root_chain_cluster_edge_id);
           spdlog::info(
-              "     Time to correct root chain cluster stabilities "
+              "   Time to correct root chain cluster stabilities "
               "(s): {:.3f}",
               sw_step);
         }
@@ -1027,12 +1067,12 @@ int main(int argc, char *argv[]) {
     calculate_root_chain_size_stability_time += sw_round.elapsed().count();
 
     if (world.rank() == 0) {
-      if (selected_root_chain_cluster_edge_id > 0) {
-        spdlog::info(
-            "  Root chain cluster with edge id {} selected as a "
-            "flat cluster",
-            selected_root_chain_cluster_edge_id);
-      }
+      // if (selected_root_chain_cluster_edge_id > 0) {
+      //   spdlog::info(
+      //       "  Root chain cluster with edge id {} selected as a "
+      //       "flat cluster",
+      //       selected_root_chain_cluster_edge_id);
+      // }
       if (opt.verbose) {
         spdlog::info("   Time to process root chain clusters (s): {:.3f}",
                      calculate_root_chain_size_stability_time);

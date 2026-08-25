@@ -25,6 +25,20 @@ namespace clams::clustering {
  * from its child cluster information for a chain once all children have been
  * received.
  *
+ * @param chain_cluster_map Map of cluster edge id -> cluster info for this
+ * chain.
+ * @param chain_info full_chain_info for this chain.
+ * @param min_cluster_size HDBSCAN min cluster size parameter.
+ * @param chain_map_ptr Pointer for YGM map of chain name -> (cluster map, chain
+ * info)
+ * @param leaf_cluster_map_ptr Pointer for YGM map of leaf cluster name
+ * (supernode) -> leaf cluster info.
+ * @param chain_name Name of this chain. Used only for debugging printouts.
+ *
+ * @return The number of valid clusters found when processing this chain. If a
+ * chain cluster has two children with size at least min_cluster_size, we say
+ * both those children are valid, set them as such, and increase the number of
+ * valid clusters found by 2.
  */
 std::size_t calculate_chain_cluster_size_stability_from_children(
     std::map<id_t, full_cluster_info> &chain_cluster_map,
@@ -252,6 +266,17 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
  * @brief Traverse up the cluster hierarchy from leaf clusters and fill in
  * cluster sizes and stabilities. Stop when we reach the root chain, which will
  * be processed separately
+ *
+ * @param leaf_cluster_map YGM map of leaf cluster name -> leaf cluster info.
+ * @param chain_map YGM map of chain name -> (cluster map, chain info)
+ * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
+ * chain cluster info. This map contains all root chain clusters regardless of
+ * if they are valid.
+ * @param _min_cluster_size HDBSCAN min cluster size parameter
+ * @param _root_chain_supernode Name of the root chain supernode.
+ *
+ * @return The number of valid clusters found when processing clusters below the
+ * root chain.
  */
 std::size_t traverse_up_cluster_hierarchy_until_root_chain(
     ygm::container::map<supernode_t, full_leaf_cluster_info> &leaf_cluster_map,
@@ -443,12 +468,30 @@ std::size_t traverse_up_cluster_hierarchy_until_root_chain(
   return num_valid_clusters;
 }
 
-// Make sure bottom root chain cluster has two children with at least min
-// cluster size. We need this assumption for size/stability processing. If this
-// is not true, split off the bottom of the root chain into a separate chain and
-// start from a cluster with two valid children
-// This function also gets the root chain second child info and sets the
-// top cluster of the second root chain child as valid
+/**
+ * @brief Make sure bottom root chain cluster has two children with at least min
+ * cluster size. We need this assumption for size/stability processing.
+ *
+ * @details If the bottom root chain cluster does not have two children with at
+ * least min cluster size, then split off the bottom of the root chain into a
+ * separate chain and start from a cluster with two valid children. This
+ * function also gets the root chain second child info and sets the top cluster
+ * of the second root chain child as valid.
+ *
+ * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
+ * chain cluster info. This map contains all root chain clusters regardless of
+ * if they are valid.
+ * @param root_chain_cluster_edges_map YGM map of root chain cluster edge id ->
+ * vector of edges added to the cluster.
+ * @param chain_map YGM map of chain name -> (cluster map, chain info).
+ * @param leaf_cluster_map YGM map of leaf cluster name -> leaf cluster info.
+ * @param root_chain_min_edge_id Edge id for the bottom cluster of the root
+ * chain (i.e., the smallest alpha-edge id in the root chain). We visit its
+ * corresponding cluster to check if it has two valid children. If not, we start
+ * traversing up the root chain from here.
+ * @param _min_cluster_size HDBSCAN min cluster size parameter
+ * @param _root_chain_supernode Name of the root chain supernode.
+ */
 void make_sure_root_chain_bottom_is_valid_and_get_second_child(
     ygm::container::map<id_t, root_chain_cluster_info> &root_chain_cluster_map,
     ygm::container::map<id_t, std::vector<edge_id_with_dist_t>>
@@ -754,10 +797,9 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
       if (comm.rank() == 0) {
         chain_map.async_visit(
             root_chain_second_child.name,
-            [&local_size, &local_stability, &local_stability_traversing_up](
-                const supernode_t &chain_name,
-                std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
-                    &chain) {
+            [](const supernode_t &chain_name,
+               std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
+                   &chain) {
               auto top_cluster_it = chain.first.rbegin();
               local_size          = top_cluster_it->second.size;
               local_stability     = top_cluster_it->second.stability;
@@ -797,6 +839,31 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
  * @brief Some root chain clusters have non-root-chain child with size less than
  * min_cluster_size, resulting in invalid root chain clusters (instead the
  * clusters annex the small child into the large child)
+ */
+
+/**
+ * @brief Make sure bottom root chain cluster has two children with at least min
+ * cluster size. We need this assumption for size/stability processing.
+ *
+ * @detail If the bottom root chain cluster does not have two children with at
+ * least min cluster size, then split off the bottom of the root chain into a
+ * separate chain and start from a cluster with two valid children. This
+ * function also gets the root chain second child info and sets the top cluster
+ * of the second root chain child as valid.
+ *
+ * @param full_root_chain_array Sorted YGM array of (cluster edge id,
+ * root chain cluster info).
+ * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
+ * chain cluster info. This map contains all root chain clusters regardless of
+ * if they are valid. This function will update the map by merging clusters so
+ * that we only keep valid root chain clusters.
+ * @param root_chain_cluster_edges_map YGM map of root chain cluster edge id ->
+ * vector of edges added to the cluster. This map contains all root chain
+ * clusters regardless of if they are valid. This function will update the map
+ * by merging clusters so that we only keep valid root chain clusters.
+ * @param chain_map YGM map of chain name -> (cluster map, chain info).
+ * @param leaf_cluster_map YGM map of leaf cluster name -> leaf cluster info.
+ * @param min_cluster_size HDBSCAN min cluster size parameter
  */
 void merge_invalid_root_chain_clusters(
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
@@ -1176,11 +1243,27 @@ void merge_invalid_root_chain_clusters(
   comm.barrier();
 }
 
-// Get cluster size, stability, and first attempt at stability_traversing_up
-// for root chain by processing each chunk of the root chain array locally and
-// then doing a prefix sum return the root chain clusters that have stability
-// > first pass stability traversing up (without correction)
-// std::vector<std::pair<id_t, std::pair<id_t, root_chain_cluster_info>>>
+/**
+ * @brief Get cluster size, stability, and first attempt at
+ * stability_traversing_up for root chain by processing each chunk of the root
+ * chain array locally and then doing a prefix sum return the root chain
+ * clusters that have stability. This is a first pass of the calculation for
+ * stability traversing up (without correction accounting for selectable
+ * root-chain clusters).
+ *
+ * @param root_chain_array Sorted YGM array of (cluster edge id,
+ * root chain cluster info) with valid root chain clusters only.
+ * @param root_chain_second_child Information of the second child for the
+ * cluster at the bottom of the root chain.
+ * @param comm YGM comm
+ * @param root_chain_supernode Supernode name of the root chain.
+ *
+ * @return Vector on each rank of the edge ids for root chain clusters that are
+ * candidates for selection. These clusters are ones that have stability >
+ * stability traversing up in the first pass calculation. They will need to be
+ * further checked/processed to see if they are selected and if their stability
+ * traversing up needs to be updated.
+ */
 std::vector<std::pair<id_t, root_chain_cluster_info>>
 calculate_root_chain_size_stability(
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
@@ -1273,7 +1356,16 @@ calculate_root_chain_size_stability(
   return local_possible_clusters_for_selection;
 }
 
-// Update the cluster map with new root chain info
+/**
+ * @brief Update the root chain cluster map with new root chain info since the
+ * root chain array will go out of scope and it will be easier to work with the
+ * root_chain_cluster_map directly after this point.
+ *
+ * @param root_chain_array Sorted YGM array of (cluster edge id,
+ * root chain cluster info) with valid root chain clusters only.
+ * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
+ * chain cluster info.
+ */
 void update_root_chain_cluster_info(
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
         &root_chain_array,
@@ -1295,7 +1387,33 @@ void update_root_chain_cluster_info(
   comm.barrier();
 }
 
-// Correct any clusters below the top root chain cluster
+/**
+ * @brief Iteratively corrects the stability traversing up for root chain
+ * clusters that are candidates for selection and finds the root chain cluster
+ * to select.
+ *
+ * @details If there are root chain clusters that are candidates for selection,
+ * then we will find exactly one root chain cluster to select. This function
+ * iteratively corrects the stability traversing up for root chain clusters that
+ * are candidates for selection and finds that root chain cluster to select. To
+ * save time, we do not correct the stability traversing up for root chain
+ * clusters that cannot be selected. Furthermore, we don't bother correcting the
+ * stability_traversing_up values in the root chain cluster map.
+ *
+ * @param possible_clusters_for_selection_array Sorted YGM array of possible
+ * root chain clusters (cluster edge id, root chain cluster info) for selection.
+ * @param comm YGM comm.
+ * @param max_cluster_edge_id The maximum cluster edge id in the root chain.
+ * This cluster at the top of the root chain represents assigning all points to
+ * the same cluster and we do not consider this case. We stop calculation if we
+ * reach this cluster.
+ *
+ * @returns Pair (selected_root_chain_cluster_edge_id,
+ * num_correction_iterations). The first entry is the cluster edge id of the
+ * selected root chain cluster. The second entry is the number of iteration
+ * passes we needed to correct the stability traversing up and find the root
+ * chain cluster to select.
+ */
 std::pair<id_t, int> correct_root_chain_stability_traversing_up(
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
               &possible_clusters_for_selection_array,
@@ -1344,21 +1462,31 @@ std::pair<id_t, int> correct_root_chain_stability_traversing_up(
 
     // Correction to stability traversing up to propagate to clusters
     // above
-    distance_t stability_correction = 0.0;
+    static distance_t stability_correction;
+    stability_correction = 0.0;
 
     // Visit the lowest correct and set its stability_traversing_up to its
     // stability
     // Also calculate the correction its (stability - old
     // stability_traversing_up) to propagate up to clusters above
-    possible_clusters_for_selection_array.async_visit(
-        lowest_cluster_to_correct_idx,
-        [&stability_correction](
-            [[maybe_unused]] const id_t              &index,
-            std::pair<id_t, root_chain_cluster_info> &value) {
-          stability_correction =
-              value.second.stability - value.second.stability_traversing_up;
-          value.second.stability_traversing_up = value.second.stability;
-        });
+    if (comm.rank() == 0) {
+      possible_clusters_for_selection_array.async_visit(
+          lowest_cluster_to_correct_idx,
+          []([[maybe_unused]] const id_t              &index,
+             std::pair<id_t, root_chain_cluster_info> &value) {
+            stability_correction =
+                value.second.stability - value.second.stability_traversing_up;
+            // std::cout << "Visiting root chain cluster " << value.first
+            //           << " with size = " << value.second.size
+            //           << ", stability = " << value.second.stability
+            //           << " and stability traversing up = "
+            //           << value.second.stability_traversing_up
+            //           << ", giving correction factor = " <<
+            //           stability_correction
+            //           << std::endl;  // debug
+            value.second.stability_traversing_up = value.second.stability;
+          });
+    }
     comm.barrier();
 
     // Make sure all ranks have the correction factor
@@ -1387,6 +1515,32 @@ std::pair<id_t, int> correct_root_chain_stability_traversing_up(
                         num_correction_iterations);
 }
 
+/**
+ * @brief Start at the root chain and traverse down the cluster hierarchy. Mark
+ * selected clusters in their respective map (chain_map or leaf_cluster_map).
+ *
+ * @details For each root chain cluster with edge id greater than the
+ * selected_root_chain_edge_id (if there is one), visit its non-root chain child
+ * cluster. A cluster is selected if it is valid and its stability is >= the sum
+ * of its child stabilities traversing up. If a cluster is not selected, then
+ * visit its two children and continue traversal. A valid leaf cluster will
+ * always have stability = stability traversing up (since it has no children)
+ * and will be selected if reached.
+ *
+ * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
+ * chain cluster info.
+ * @param chain_map YGM map of chain name -> (cluster map, chain info).
+ * @param leaf_cluster_map YGM map of leaf cluster name -> leaf cluster info.
+ * @param root_chain_second_child Information on the second child for the bottom
+ * root chain cluster.
+ * @param _min_cluster_size HDBSCAN min cluster size parameter
+ * @param _root_chain_supernode Name of the root chain supernode.
+ * @param _selected_root_chain_cluster_edge_id Edge ID of the selected root
+ * chain cluster (if there is one). If none is selected, this should be 0.
+ *
+ * @returns Vector of clusters (represented as (supernode, edge_id)) selected on
+ * each rank.
+ */
 std::vector<cluster_name_t> traverse_down_hierarchy_and_select_clusters(
     ygm::container::map<id_t, root_chain_cluster_info> &root_chain_cluster_map,
     ygm::container::map<supernode_t,
@@ -1546,6 +1700,34 @@ std::vector<cluster_name_t> traverse_down_hierarchy_and_select_clusters(
   return local_selected_clusters;
 }
 
+/**
+ * @brief Assign consecutive ids to selected clusters and then label points with
+ * their cluster id. Points that are not in a selected cluster are labeled as
+ * noise.
+ *
+ * @details Takes in the local_selected_clusters and labels points in those
+ * clusters on this rank. An MPI prefix sum call should be used first to provide
+ * a start_cluster_id for each rank to start enumerating clusters so that
+ * clusters get consecutive non-overlapping labels in the processing.
+ *
+ * @param chain_map YGM map of chain name -> (cluster map, chain info).
+ * @param leaf_cluster_map YGM map of leaf cluster name -> leaf cluster info.
+ * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
+ * chain cluster info.
+ * @param root_chain_cluster_edges_map YGM map of root chain cluster edge id ->
+ * vector of edges added to this cluster.
+ * @param point_to_cluster_id_map An empty YGM map of point id -> cluster label.
+ * @param edge_endpoints_map YGM map of edge id -> pair of point ids of its
+ * endpoints.
+ * @param local_selected_clusters Vector of selected clusters to process on this
+ * rank.
+ * @param start_cluster_id The first id to enumerate clusters on this rank.
+ * @param root_chain_supernode Name of the root chain supernode. We use this to
+ * figure out if a selected cluster is in the root chain or not.
+ * @param root_chain_second_child_name Name of the second child of the bottom
+ * root chain cluster. We use this if traversing down from a selected root chain
+ * cluster and assigning all points below its cluster id.
+ */
 void assign_points_cluster_ids(
     ygm::container::map<supernode_t,
                         std::pair<std::map<id_t, full_cluster_info>,
@@ -1771,6 +1953,23 @@ void assign_points_cluster_ids(
   return;
 }
 
+/**
+ * @brief Writes information of all clusters to file, disregarding
+ * min_cluster_size.
+ *
+ * @param comm YGM comm.
+ * @param output_dir Output directory for YGM multi_output to write files.
+ * @param _cluster_file_name Filename prefix for output files.
+ * @param file_number File number to add to the filename for this rank.
+ * @param root_chain_min_edge_id The smallest cluster edge id in the root chain.
+ * We write the second root chain child info to that cluster.
+ * @param root_chain_second_child Info of the second child for the bottom root
+ * chain cluster.
+ * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
+ * chain cluster info.
+ * @param chain_map YGM map of chain name -> (cluster map, chain info).
+ * @param leaf_cluster_map YGM map of leaf cluster name -> leaf cluster info.
+ */
 void write_all_clusters_to_file_including_invalid_clusters(
     ygm::comm &comm, std::string output_dir, std::string _cluster_file_name,
     int file_number, supernode_t _root_chain_supernode,
@@ -1888,6 +2087,21 @@ void write_all_clusters_to_file_including_invalid_clusters(
   comm.barrier();
 }
 
+/**
+ * @brief Go through all clusters and get valid clusters. Store valid clusters
+ * and their information in the valid_clusters_map. Erase invalid clusters from
+ * root_chain_cluster_map, chain_map, and leaf_cluster_map.
+ *
+ * @param valid_cluster_map An empty YGM map of valid cluster name -> valid
+ * cluster info.
+ * @param root_chain_min_edge_id The smallest cluster edge id in the root chain.
+ * We write the second root chain child info to that cluster.
+ * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
+ * chain cluster info.
+ * @param chain_map YGM map of chain name -> (cluster map, chain info).
+ * @param leaf_cluster_map YGM map of leaf cluster name -> leaf cluster info.
+ * @param _root_chain_supernode Name of the root chain supernode.
+ */
 void get_and_keep_valid_clusters_only(
     ygm::container::map<cluster_name_t, full_valid_cluster_info>
                                                        &valid_cluster_map,
@@ -1933,7 +2147,6 @@ void get_and_keep_valid_clusters_only(
           std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
               &chain) {
         // First erase the invalid clusters
-        int old_chain_size = chain.first.size();
         for (auto it = chain.first.begin(); it != chain.first.end();) {
           if (!it->second.valid_cluster) {
             chain.first.erase(
@@ -2040,6 +2253,17 @@ void get_and_keep_valid_clusters_only(
   comm.barrier();
 }
 
+/**
+ * @brief Fill in the valid parent/child clusters of clusters in the
+ * valid_cluster_map. Do this by going through chains by their contraction round
+ * and send valid clusters up the hierarchy to find their valid parent cluster.
+ *
+ * @param valid_cluster_map An empty YGM map of valid cluster name -> valid
+ * cluster info.
+ * @param chain_map YGM map of chain name -> (cluster map, chain info).
+ * @param leaf_cluster_map YGM map of leaf cluster name -> leaf cluster info.
+ * @param _root_chain_supernode Name of the root chain supernode.
+ */
 void get_valid_cluster_parent_child_relations(
     ygm::container::map<cluster_name_t, full_valid_cluster_info>
                                                              &valid_cluster_map,
@@ -2210,6 +2434,17 @@ void get_valid_cluster_parent_child_relations(
   }
 }
 
+/**
+ * @brief Writes information on valid clusters to file, disregarding
+ * min_cluster_size.
+ *
+ * @param comm YGM comm.
+ * @param output_dir Output directory for YGM multi_output to write files.
+ * @param _cluster_file_name Filename prefix for output files.
+ * @param file_number File number to add to the filename for this rank.
+ * @param valid_cluster_map YGM map of valid clusters mapping cluster name ->
+ * valid cluster info.
+ */
 void write_valid_clusters_to_file(
     ygm::comm &comm, std::string output_dir, std::string _cluster_file_name,
     int file_number,

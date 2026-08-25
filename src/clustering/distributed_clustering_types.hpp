@@ -30,6 +30,7 @@ using id_t = clams::id_t;
 // Distance type.
 using distance_t = clams::distance_t;
 
+// Translates id_t to MPI type
 MPI_Datatype mpi_id_type() {
   if constexpr (std::is_same_v<id_t, uint32_t>) {
     return MPI_UINT32_T;
@@ -42,6 +43,7 @@ MPI_Datatype mpi_id_type() {
   }
 }
 
+// Translates distance_t to MPI type
 MPI_Datatype mpi_distance_type() {
   if constexpr (std::is_same_v<distance_t, float>) {
     return MPI_FLOAT;
@@ -54,6 +56,7 @@ MPI_Datatype mpi_distance_type() {
   }
 }
 
+// Cluster label type
 using cluster_id_t             = int32_t;
 cluster_id_t NOISE_POINT_LABEL = -1;  // cluster label for noise points
 
@@ -71,7 +74,7 @@ using cluster_name_t = std::pair<supernode_t, id_t>;
 static const cluster_name_t BLANK_CLUSTER_NAME{BLANK_SUPERNODE, 0};
 
 using edge_id_with_dist_t = std::pair<id_t, distance_t>;
-id_t ROOT_EDGE_ID         = -1;
+// id_t ROOT_EDGE_ID         = -1;
 
 /**
  * @brief Calculate lambda = 1/distance from distance.
@@ -100,7 +103,9 @@ std::ostream &operator<<(std::ostream &os, const std::vector<T> my_vector) {
   return os;
 }
 
-// Holds all edge info
+/**
+ * @brief Holds all edge info needed in MST contraction phase.
+ **/
 struct edge_contraction_info {
   // Current reps of supernode endpoints (if edge is not contracted yet, i.e.,
   // contraction_round = 0). We don't store the full supernodes since the round
@@ -133,14 +138,19 @@ struct edge_contraction_info {
 // overload operator<< for edge info
 std::ostream &operator<<(std::ostream                &os,
                          const edge_contraction_info &edge_info) {
-  os << "last supernode endpoint reps = " << edge_info.endpoint_supernode_reps
+  os << "dist = " << edge_info.distance
+     << ", last supernode endpoint reps = " << edge_info.endpoint_supernode_reps
      << ", contraction round = " << edge_info.contraction_round
      << ", current chain supernode = " << edge_info.chain_supernode
      << ", found chain parent = " << edge_info.chain_parent_edge_id;
   return os;
 }
 
-// Holds info we need to keep for alpha edges (contracted after 1st round)
+/**
+ * @brief Holds all info we need to keep for alpha edges, which are edges
+ * contracted after the first round. Alpha edges have 2 non-leaf children in the
+ * dendrogram.
+ **/
 struct alpha_edge_info {
   // Supernode children (will have 1 or 2) in the dendrogram
   std::array<supernode_t, 2> dendrogram_children{BLANK_SUPERNODE,
@@ -169,7 +179,10 @@ std::ostream &operator<<(std::ostream &os, const alpha_edge_info &edge_info) {
   return os;
 }
 
-// Holds possible leaf cluster info
+/**
+ * @brief Holds info for clusters that are leaf clusters (have no child
+ * clusters) when we disregard min_cluster_size
+ **/
 struct full_leaf_cluster_info {
   // Chain the parent edge belongs to
   supernode_t parent_chain{BLANK_SUPERNODE};
@@ -226,7 +239,9 @@ std::ostream &operator<<(std::ostream                 &os,
   return os;
 }
 
-// Holds cluster info
+/**
+ * @brief Holds cluster info
+ **/
 struct full_cluster_info {
   // All stored values are for the non-chain child
 
@@ -301,7 +316,9 @@ std::ostream &operator<<(std::ostream &os, const full_cluster_info &cluster) {
   return os;
 }
 
-// Holds chain info we need in addition to the clusters
+/**
+ * @brief Holds chain info we need in addition to the clusters
+ **/
 struct full_chain_info {
   // Parent chain
   supernode_t parent_chain{BLANK_SUPERNODE};
@@ -342,6 +359,9 @@ struct full_chain_info {
 #endif
 };
 
+/**
+ * @brief Holds the 2nd root chain child cluster info
+ **/
 struct extra_child_cluster_info {
   id_t        size{0};
   distance_t  stability{0.0};
@@ -356,7 +376,11 @@ struct extra_child_cluster_info {
 #endif
 };
 
-// Holds reduced cluster info for processing root-chain clusters
+/**
+ * @brief Holds reduced cluster info for processing root-chain clusters.
+ * Notably, unlike full_cluster_info, the vector of edges is not included and
+ * instead num_points_added and sum_lambda_edges_added are precomputed.
+ **/
 struct root_chain_cluster_info {
   // Non-root child chain name
   supernode_t child{BLANK_SUPERNODE};
@@ -441,7 +465,9 @@ std::ostream &operator<<(std::ostream                  &os,
   return os;
 }
 
-// Holds valid cluster info for printout
+/**
+ * @brief Holds info for valid clusters to write to file
+ **/
 struct full_valid_cluster_info {
   // All stored values for printout for valid clusters
 

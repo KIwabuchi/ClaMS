@@ -386,7 +386,7 @@ def main():
             # This is not the best way to set the number of threads for NEO-DNND, but it is a simple way to do it for now.
             dnnd_exe = f'{dnnd_exe} -T {opts.neodnnd_threads}'
 
-    # Select HDBSCAN sexecutable
+    # Select HDBSCAN executable
     # If --distributed_hdbscan is sepecified and the user did not override --clustering_exe,
     # switch the default to run_distributed_hdbscan_clustering
     clustering_exe = opts.clustering_exe

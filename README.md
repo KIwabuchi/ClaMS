@@ -6,7 +6,11 @@ ClaMS is a distributed memory HPC clustering tool inspired by
 for clustering datasets with billions of points in general metric spaces for users with access to HPC systems. The
 general approach taken is to take the standard HDBSCAN algorithm and swap components that do not scale or apply to
 non-Euclidean data for scalable primitives. This often requires resorting to algorithms that are approximations of what
-is done in HDBSCAN, sometimes without approximation guaranteees.
+is done in HDBSCAN, sometimes without approximation guarantees.
+
+Note: This code works best if the input data is de-duplicated, with exact duplicate points removed. 
+If not, HDBSCAN will identify clusters with duplicate points as highly stable and always select them.
+
 
 ## Build
 ```shell

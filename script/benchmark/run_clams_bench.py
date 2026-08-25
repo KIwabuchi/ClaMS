@@ -251,7 +251,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         job_script.write("echo\n")
         job_script.write("date\n")
         job_script.write(f"echo ================================\n")
-        job_script.write(f"echo \"Running MFS\"\n")
+        job_script.write(f"echo \"Running MFC\"\n")
         job_script.write(f"echo ================================\n")
         mfc_command = f"{mfc_exe} -d {dnnd_ds_path} -f {distance_func}"
         add_srun_cmd(num_tasks_per_node, mfc_command, job_script)

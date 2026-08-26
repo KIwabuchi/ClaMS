@@ -180,8 +180,10 @@ int main(int argc, char* argv[]) {
     }
     ++n_noise_points;
 
-    std::deque<id_t> bfs_queue;
+    std::deque<id_t>  bfs_queue;
+    map_t<id_t, bool> visited;
     bfs_queue.push_back(point_id);
+    visited[point_id]  = true;
     bool found_cluster = false;
 
     while (!bfs_queue.empty() && !found_cluster) {
@@ -189,12 +191,16 @@ int main(int argc, char* argv[]) {
       bfs_queue.pop_front();
 
       for (const auto neighbor_id : mst.at(current_point_id)) {
+        if (visited.find(neighbor_id) != visited.end()) {
+          continue;  // Already visited, e.g., the node we came from
+        }
         if (point_cluster_map.at(neighbor_id) != k_noise_cluster_id) {
           point_cluster_map[point_id] = point_cluster_map.at(neighbor_id);
           found_cluster               = true;
           ++n_assigned_points;
           break;
         } else {
+          visited[neighbor_id] = true;
           bfs_queue.push_back(neighbor_id);
         }
       }
@@ -205,9 +211,10 @@ int main(int argc, char* argv[]) {
     }
   }
   spdlog::info("Finished assigning cluster IDs to noise points");
-  spdlog::info("Number of noise points: {}", n_noise_points);
-  spdlog::info("Number of noise points assigned to clusters: {}",
-               n_assigned_points);
+  spdlog::info("Number of noise points in the original data: {}",
+               n_noise_points);
+  spdlog::info("Number of remaining noise points: {}",
+               n_noise_points - n_assigned_points);
 
   dump_point_cluster_ids(point_cluster_map, opt.cluster_ids_out_path);
   spdlog::info("Dumped point cluster IDs to {}",

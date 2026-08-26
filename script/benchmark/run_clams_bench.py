@@ -32,7 +32,7 @@ from bench_utilities import *
 def parse_options():
     # Set up argument parsing
     parser = argparse.ArgumentParser(description='Generate a batch shell script'
-                                                 'for HPC clustering.',
+                                                 'for ClaMS HPC clustering.',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     cwd = os.getcwd()
@@ -84,6 +84,9 @@ def parse_options():
     parser.add_argument('-s', '--min_samples', type=int, default=-1,
                         dest='min_samples',
                         help='min_sample value for calculating core distance. If -1 is given, core distance is not calculated.')
+    # Use distributed HDBSCAN
+    parser.add_argument('--distributed_hdbscan', action='store_true',
+                        help='Use distributed HDBSCAN (run_distributed_hdbscan_clustering) instead of serial version(run_hdbscan_clustering).')
 
     # For evaluation
     parser.add_argument('-g', '--ground_truth_path',
@@ -101,7 +104,7 @@ def parse_options():
                         help='Path to the root of output directories.'
                              'A new subdirectory will be created for each generation.')
 
-    # Batch Job configurations for DNND, AMST, and YGM partition comparison
+    # Batch Job configurations for DNND, AMST, Distributed HDBSCAN, and YGM partition comparison
     parser.add_argument('-N', '--num_nodes', type=int, default=1,
                         help='Number of nodes to use for running DNND and AMST')
     parser.add_argument('-T', '--num_tasks_per_node', type=int, default=32,
@@ -138,7 +141,7 @@ def parse_options():
                         default=f'{cwd}/script/benchmark/evaluate_clustering_quality.py',
                         help='Path to the Python clustering evaluation script.')
     parser.add_argument('-Y', '--ygm_evaluator_exe',
-                        default=f'{cwd}/tpls/partition-comparison/build/src/clustering_metrics',
+                        default=f'{cwd}/tpls/clams-cc/build/src/clustering_metrics',
                         help='Path to the YGM clustering evaluation executable.')
     parser.add_argument('--noise_point_assigner_exe',
                         default=f'{cwd}/src/clustering/cluster_noise_points',
@@ -200,7 +203,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                   backup_knng,
                                   mfc_exe,
                                   amst_exe, amst_approx_bound_list,
-                                  clustering_exe,
+                                  clustering_exe, distributed_hdbscan,
                                   evaluator,
                                   ygm_cluster_eval, verbose,
                                   ground_truth_path,
@@ -248,7 +251,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         job_script.write("echo\n")
         job_script.write("date\n")
         job_script.write(f"echo ================================\n")
-        job_script.write(f"echo \"Running MFS\"\n")
+        job_script.write(f"echo \"Running MFC\"\n")
         job_script.write(f"echo ================================\n")
         mfc_command = f"{mfc_exe} -d {dnnd_ds_path} -f {distance_func}"
         add_srun_cmd(num_tasks_per_node, mfc_command, job_script)
@@ -291,14 +294,25 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
 
                 job_script.write(
                     f"echo \"Min cluster size ${{MIN_CLUSTER_SIZE}}\"\n")
-                cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
-                cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
-                hpc_clustering_command = (f"{clustering_exe} -i {amst_ds_path} -M "
-                                        f" -m ${{MIN_CLUSTER_SIZE}} "
-                                        f" -o {cluster_label_file} "
-                                        f" -c {cluster_tree_file} "
-                                        f" -P ")
-                add_cmd(hpc_clustering_command, job_script)
+                if distributed_hdbscan:
+                    cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
+                    cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
+                    verbose_flag = '-v' if verbose else ''
+                    hpc_clustering_command = (f"{clustering_exe} {verbose_flag} -i {amst_ds_path} -M "
+                                            f" -m ${{MIN_CLUSTER_SIZE}} "
+                                            f" -o {cluster_label_file} "
+                                            f" -c {cluster_tree_file} "
+                                            f" -n {num_tasks_per_node}")
+                    add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
+                else:
+                    cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
+                    cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
+                    hpc_clustering_command = (f"{clustering_exe} -i {amst_ds_path} -M "
+                                            f" -m ${{MIN_CLUSTER_SIZE}} "
+                                            f" -o {cluster_label_file} "
+                                            f" -c {cluster_tree_file} "
+                                            f" -P ")
+                    add_cmd(hpc_clustering_command, job_script)
 
                 # Run the evaluation step
                 if ground_truth_path:
@@ -372,6 +386,15 @@ def main():
             # This is not the best way to set the number of threads for NEO-DNND, but it is a simple way to do it for now.
             dnnd_exe = f'{dnnd_exe} -T {opts.neodnnd_threads}'
 
+    # Select HDBSCAN executable
+    # If --distributed_hdbscan is sepecified and the user did not override --clustering_exe,
+    # switch the default to run_distributed_hdbscan_clustering
+    clustering_exe = opts.clustering_exe
+    if opts.distributed_hdbscan:
+        default_clustering_exe = f'{os.getcwd()}/src/clustering/run_hdbscan_clustering'
+        if clustering_exe == default_clustering_exe:
+            clustering_exe = f'{os.getcwd()}/src/clustering/run_distributed_hdbscan_clustering'
+
     if opts.ygm_cluster_eval:
         evaluator = opts.ygm_evaluator_exe
     else:
@@ -397,7 +420,8 @@ def main():
                                                opts.mfc_exe,
                                                opts.amst_exe,
                                                amst_approx_bound_list,
-                                               opts.clustering_exe,
+                                               clustering_exe,
+                                               opts.distributed_hdbscan,
                                                evaluator,
                                                opts.ygm_cluster_eval,
                                                opts.verbose,

@@ -159,18 +159,18 @@ def generate_job_name():
     time.sleep(2)
     return f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
+def echo_stage_name(job_script, stage_name):
+    job_script.write("echo\n")
+    job_script.write("date\n")
+    job_script.write(f"echo ================================\n")
+    job_script.write(f"echo \"{stage_name}\"\n")
+    job_script.write(f"echo ================================\n")
 
 def add_clustering_evaluation(job_script, cluster_label_file, amst_ds_path,
                               ground_truth_path, evaluator,
                               ygm_cluster_eval,
                               num_tasks_per_node, verbose,
                               singleton_cluster_to_noise_points):
-    job_script.write("echo\n")
-    job_script.write("date\n")
-    job_script.write(f"echo ================================\n")
-    job_script.write(f"echo \"Evaluating Clustering\"\n")
-    job_script.write(f"echo ================================\n")
-
     if ygm_cluster_eval:
         job_script.write("echo \"Evaluating Clustering using YGM\"\n")
         verbose_flag = " -v" if verbose else ""
@@ -227,9 +227,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         job_script.write("echo\n")
         job_script.write("date\n")
         if len(input_dnnd_ds_path) == 0:
-            job_script.write(f"echo ================================\n")
-            job_script.write(f"echo \"Building KNNG\"\n")
-            job_script.write(f"echo ================================\n")
+            echo_stage_name(job_script, "Building KNNG")
             dnnd_ds_path = f"{work_dir}/dnnd_pm_datastore"
             dnnd_batch_size = 2 ** 25
             verbose_flag = '-v' if verbose else ''
@@ -237,8 +235,6 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             add_srun_cmd(num_tasks_per_node, dnnd_command, job_script)
             if backup_knng:
                 dnnd_ds_path_backup = f"{dnnd_ds_path}_backup"
-                job_script.write(f"echo\n")
-                job_script.write("date\n")
                 job_script.write(f"echo \"Backing up KNNG datastore\"\n")
                 backup_knng_command = f"cp -r {dnnd_ds_path} {dnnd_ds_path_backup}"
                 add_cmd(backup_knng_command, job_script)
@@ -248,22 +244,14 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             dnnd_ds_path = input_dnnd_ds_path
 
         # Connect the CCs
-        job_script.write("echo\n")
-        job_script.write("date\n")
-        job_script.write(f"echo ================================\n")
-        job_script.write(f"echo \"Running MFC\"\n")
-        job_script.write(f"echo ================================\n")
+        echo_stage_name(job_script, "Connecting the CCs using MFC")
         mfc_command = f"{mfc_exe} -d {dnnd_ds_path} -f {distance_func}"
         add_srun_cmd(num_tasks_per_node, mfc_command, job_script)
 
         # Convert to core distance
         # TODO: Implement
         if False and min_samples > 0:
-            job_script.write("echo\n")
-            job_script.write("date\n")
-            job_script.write(f"echo ================================\n")
-            job_script.write(f"echo Convert to core distance kNNG\n")
-            job_script.write(f"echo ================================\n")
+            echo_stage_name(job_script, "Convert to core distance kNNG")
             knng_coredist_dir = f"{work_dir}/knng_coredist/"
             add_cmd(f'mkdir -p {knng_coredist_dir}', job_script)
             conv2coredist_cmd = f"./src/conv_knng_to_core_dist -i {dnnd_ds_path} -o {knng_coredist_dir}/knng.txt -m {min_samples}"
@@ -272,11 +260,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         try_no = 0
         for amst_approx_bound in amst_approx_bound_list:
             # Run the AMST step
-            job_script.write("echo\n")
-            job_script.write("date\n")
-            job_script.write(f"echo ================================\n")
-            job_script.write(f"echo \"Running AMST, approx bound = {amst_approx_bound}\"\n")
-            job_script.write(f"echo ================================\n")
+            echo_stage_name(job_script, f"Running AMST, approx bound = {amst_approx_bound}")
             amst_ds_path = f"{work_dir}/amst_pm_datastore_a{amst_approx_bound}"
             amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path} -e {amst_approx_bound}"
             add_srun_cmd(num_tasks_per_node, amst_command, job_script)
@@ -286,12 +270,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                 # Set the min cluster size environment variable for this run
                 add_cmd(set_cmd, job_script, False, False)
 
-                job_script.write("echo\n")
-                job_script.write("date\n")
-                job_script.write(f"echo ================================\n")
-                job_script.write(f"echo \"Running CLAMS-HDBSCAN, min cluster size = ${{MIN_CLUSTER_SIZE}}\"\n")
-                job_script.write(f"echo ================================\n")
-
+                echo_stage_name(job_script, f"Running CLAMS-HDBSCAN")
                 job_script.write(
                     f"echo \"Min cluster size ${{MIN_CLUSTER_SIZE}}\"\n")
                 if distributed_hdbscan:
@@ -316,17 +295,14 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
 
                 # Run the evaluation step
                 if ground_truth_path:
+                    echo_stage_name(job_script, "Evaluating Clustering Results")
                     add_clustering_evaluation(
                         job_script, cluster_label_file, amst_ds_path,
                         ground_truth_path, evaluator,
                         ygm_cluster_eval, num_tasks_per_node, verbose,
                         singleton_cluster_to_noise_points)
 
-                    job_script.write("echo\n")
-                    job_script.write("date\n")
-                    job_script.write(f"echo ================================\n")
-                    job_script.write(f"echo \"Assign clusters to noise points\"\n")
-                    job_script.write(f"echo ================================\n")
+                    echo_stage_name(job_script, "Assign clusters to noise points")
                     # Remove the .txt extension and add .noise_assigned.txt
                     cluster_label_file_no_noise = f"{cluster_label_file[:-4]}.noise_assigned.txt"
                     cluster_assign_command = (f"{noise_point_assigner_exe} -M "
@@ -335,7 +311,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                               f"-o {cluster_label_file_no_noise}")
                     add_cmd(cluster_assign_command, job_script)
 
-
+                    echo_stage_name(job_script, "Evaluate clustering results after assigning clusters to noise points")
                     add_clustering_evaluation(
                         job_script, cluster_label_file_no_noise, amst_ds_path,
                         ground_truth_path, evaluator,

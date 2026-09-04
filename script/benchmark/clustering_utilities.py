@@ -45,21 +45,6 @@ def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points
             ami = adjusted_mutual_info_score(true_labels[clustered_points],
                                             cluster_labels[clustered_points])
             # sil = silhouette_score(raw_data[clustered_points], cluster_labels[clustered_points])
-        pct_clustered = (np.sum(clustered_points) / cluster_labels.shape[0])
-        print(f"Cluster coverage (%): {pct_clustered * 100:.2f}")
-
-        if singleton_cluster_to_noise_points:
-            print(
-                "Assigning a singleton cluster to each noise point in the clustering result")
-            cluster_labels = assign_singleton_cluster_to_noise_points(cluster_labels, max_cluster_id)
-            ari = adjusted_rand_score(true_labels, cluster_labels)
-            ami = adjusted_mutual_info_score(true_labels, cluster_labels)
-        else:
-            ari = adjusted_rand_score(true_labels[clustered_points],
-                                    cluster_labels[clustered_points])
-            ami = adjusted_mutual_info_score(true_labels[clustered_points],
-                                            cluster_labels[clustered_points])
-            # sil = silhouette_score(raw_data[clustered_points], cluster_labels[clustered_points])
     else:
         ari = adjusted_rand_score(true_labels, cluster_labels)
         ami = adjusted_mutual_info_score(true_labels, cluster_labels)
@@ -71,7 +56,6 @@ def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points
 
 
 # Assign a cluster ID to each noise point
-def assign_singleton_cluster_to_noise_points(cluster_labels, noise_id_offset):
 def assign_singleton_cluster_to_noise_points(cluster_labels, noise_id_offset):
     new_labels = cluster_labels.copy()
 

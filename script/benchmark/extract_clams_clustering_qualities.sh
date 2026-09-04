@@ -17,7 +17,7 @@ if [[ $# -eq 0 ]]; then
   exit 1
 fi
 
-printf "kNNG_k,min_cluster_size,final_clusters,singleton_to_noise,cluster_coverage,ARI,AMI,file\n"
+printf "kNNG k,Min Cluster Size,Found Clusters,MST clustering,Cluster coverage,ARI,AMI,file\n"
 
 for file in "$@"; do
   awk -v fname="$file" '
@@ -28,19 +28,19 @@ for file in "$@"; do
     }
 
     BEGIN {
-      k = "NA"; mcs = "NA"; fc = "NA"; singleton = "NA"; coverage = "NA"; have_ari = 0; ari = "NA"
+      k = "NA"; mcs = "NA"; fc = "NA"; mst_clustering = "NA"; coverage = "NA"; have_ari = 0; ari = "NA"
     }
 
     /kNNG k:/ || /^[[:space:]]*k:[[:space:]]*[0-9]+[[:space:]]*$/ { k = lastfield($0); next }
     /Min cluster size/       { mcs = lastfield($0); next }
-    /Evaluating Clustering Results, no noise points =/ { singleton = lastfield($0); next }
+    /MST-based cluster guess/ { mst_clustering = lastfield($0); next }
     /#of final clusters/     { fc = lastfield($0); next }
     /Cluster coverage \(%\)/ { coverage = lastfield($0); next }
     /ARI/                    { ari = lastfield($0); have_ari = 1; next }
     /AMI/ {
       if (have_ari) {
         ami = lastfield($0)
-        printf "%s,%s,%s,%s,%s,%s,%s,%s\n", k, mcs, fc, singleton, coverage, ari, ami, fname
+        printf "%s,%s,%s,%s,%s,%s,%s,%s\n", k, mcs, fc, mst_clustering, coverage, ari, ami, fname
         have_ari = 0
       }
       next

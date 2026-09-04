@@ -230,7 +230,8 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
     finish_stage(job_script)
 
     if ground_truth_path:
-        echo_stage_name(job_script, "Evaluating Clustering Results, no noise points = False")
+        echo_stage_name(job_script, "Evaluating Clustering Results")
+        job_script.write(f"echo \"MST-based cluster guess: False\"\n")
         add_clustering_evaluation(
             job_script, cluster_label_file, amst_ds_path, ground_truth_path,
             evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
@@ -246,9 +247,8 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
         add_cmd(cluster_assign_command, job_script)
         finish_stage(job_script)
 
-        echo_stage_name(
-            job_script,
-            "Evaluate clustering results, no noise points = True")
+        echo_stage_name(job_script, "Evaluate clustering results")
+        job_script.write(f"echo \"MST-based cluster guess: True\"\n")
         add_clustering_evaluation(
             job_script, cluster_label_file_no_noise, amst_ds_path,
             ground_truth_path, evaluator, ygm_cluster_eval,

@@ -130,6 +130,9 @@ int main(int argc, char* argv[]) {
       "Assigning cluster IDs to noise points by traversing the MST edges");
   std::size_t n_noise_points    = 0;
   std::size_t n_assigned_points = 0;
+  // NOTE: this algorithm is not determinstic because threads update the shared
+  // point_cluster_map concurrently.
+  // We employ this algorithm because it is simple and fast.
   OMP_DIRECTIVE(parallel for reduction(+ : n_noise_points, n_assigned_points))
   for (size_t i = 0; i < point_ids.size(); ++i) {
     const auto point_id = point_ids.at(i);
@@ -153,6 +156,7 @@ int main(int argc, char* argv[]) {
           continue;  // Already visited, e.g., the node we came from
         }
         if (point_cluster_map.at(neighbor_id) != k_noise_cluster_id) {
+          // Found a neighbor that belongs to a cluster
           point_cluster_map[point_id] = point_cluster_map.at(neighbor_id);
           found_cluster               = true;
           ++n_assigned_points;

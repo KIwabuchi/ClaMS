@@ -1,3 +1,6 @@
+// Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
+// Project Developers. See the top-level COPYRIGHT file for details.
+
 // Assign cluster IDs to noise points by traversing the MST edges.
 // Traverse the MST edges from each noise point in BFS manner until a point that
 // belongs to a cluster is found.
@@ -77,7 +80,7 @@ int main(int argc, char* argv[]) {
   option opt;
   parse_option(argc, argv, opt);
 
-  map_t<id_t, std::vector<id_t>> mst;
+  map_t<id_t, std::vector<id_t>> mst_graph;
   if (opt.metall_mst) {
     spdlog::info("Attaching MST in Metall datastore");
     metall::manager metall_manager(metall::open_read_only, opt.mst_edges_path);
@@ -89,24 +92,24 @@ int main(int argc, char* argv[]) {
                        opt.mst_edges_path.string());
       std::abort();
     }
+    spdlog::info("#of MST edges: {}", input_mst_edges.size());
     spdlog::info("Copying MST edges from Metall datastore");
     for (const auto& edge : *input_mst_edges) {
-      mst[edge.ids[0]].push_back(edge.ids[1]);
-      mst[edge.ids[1]].push_back(edge.ids[0]);
+      mst_graph[edge.ids[0]].push_back(edge.ids[1]);
+      mst_graph[edge.ids[1]].push_back(edge.ids[0]);
     }
-    spdlog::info("#of MST edges: {}", mst.size());
   } else {
     spdlog::info("Reading MST edges");
     weighted_edge_list_t input_mst_edges;
     read_edges(opt.mst_edges_path, input_mst_edges);
     spdlog::info("#of MST edges: {}", input_mst_edges.size());
     for (const auto& edge : input_mst_edges) {
-      mst[edge.ids[0]].push_back(edge.ids[1]);
-      mst[edge.ids[1]].push_back(edge.ids[0]);
+      mst_graph[edge.ids[0]].push_back(edge.ids[1]);
+      mst_graph[edge.ids[1]].push_back(edge.ids[0]);
     }
   }
 
-  if (mst.empty()) {
+  if (mst_graph.empty()) {
     spdlog::warn("No MST edges found in the input file or directory: {}",
                  opt.mst_edges_path.string());
     return EXIT_SUCCESS;
@@ -145,7 +148,7 @@ int main(int argc, char* argv[]) {
       const auto current_point_id = bfs_queue.front();
       bfs_queue.pop_front();
 
-      for (const auto neighbor_id : mst.at(current_point_id)) {
+      for (const auto neighbor_id : mst_graph.at(current_point_id)) {
         if (visited.find(neighbor_id) != visited.end()) {
           continue;  // Already visited, e.g., the node we came from
         }

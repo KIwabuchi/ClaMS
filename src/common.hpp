@@ -79,6 +79,10 @@ inline void read_edges(const std::filesystem::path &path,
   }
 }
 
+/// \brief Read a k-nearest-neighbor graph (kNNG) from files and store it as
+/// an edge list.
+/// \param knng_files A list of knng files.
+/// \param graph A graph to store the knng.
 inline void read_knng_edges(
     const std::vector<std::filesystem::path> &knng_files,
     weighted_edge_list_t                     &edges) {

@@ -1,7 +1,13 @@
 // Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
 // Project Developers. See the top-level COPYRIGHT file for details.
 
-// Read kNNG and compute how well the kNNG and clusters are correlated.
+// This program evaluates how strongly a k-nearest-neighbor graph (kNNG) agrees
+// with clustering result. For each point, it checks whether its nearest k
+// neighbors belong to the same cluster as the point itself. It reports the
+// correlation rate for each k, which is the fraction of neighbors that are in
+// the same cluster as the point. A high correlation rate indicates that the
+// clustering result is consistent with the local neighborhood structure of the
+// data.
 
 #include <unistd.h>
 

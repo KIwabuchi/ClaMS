@@ -188,6 +188,62 @@ def add_clustering_evaluation(job_script, cluster_label_file, amst_ds_path,
             evaluation_command += " -s"
         add_cmd(evaluation_command, job_script)
 
+def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
+                       amst_ds_path, clustering_exe, distributed_hdbscan,
+                       evaluator, ygm_cluster_eval, num_tasks_per_node,
+                       verbose, ground_truth_path,
+                       singleton_cluster_to_noise_points,
+                       noise_point_assigner_exe):
+    # Set the min cluster size environment variable for this run
+    add_cmd(set_cmd, job_script, False, False)
+
+    echo_stage_name(job_script, "Running CLAMS-HDBSCAN")
+    job_script.write(f"echo \"Min cluster size ${{MIN_CLUSTER_SIZE}}\"\n")
+    if distributed_hdbscan:
+        cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
+        cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
+        verbose_flag = '-v' if verbose else ''
+        hpc_clustering_command = (f"{clustering_exe} {verbose_flag} -i {amst_ds_path} -M "
+                                  f" -m ${{MIN_CLUSTER_SIZE}} "
+                                  f" -o {cluster_label_file} "
+                                  f" -c {cluster_tree_file} "
+                                  f" -n {num_tasks_per_node}")
+        add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
+    else:
+        cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
+        cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
+        hpc_clustering_command = (f"{clustering_exe} -i {amst_ds_path} -M "
+                                  f" -m ${{MIN_CLUSTER_SIZE}} "
+                                  f" -o {cluster_label_file} "
+                                  f" -c {cluster_tree_file} "
+                                  f" -P ")
+        add_cmd(hpc_clustering_command, job_script)
+
+    if ground_truth_path:
+        echo_stage_name(job_script, "Evaluating Clustering Results")
+        add_clustering_evaluation(
+            job_script, cluster_label_file, amst_ds_path, ground_truth_path,
+            evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
+            singleton_cluster_to_noise_points)
+
+        echo_stage_name(job_script, "Assign clusters to noise points")
+        cluster_label_file_no_noise = f"{cluster_label_file[:-4]}.noise_assigned.txt"
+        cluster_assign_command = (f"{noise_point_assigner_exe} -M "
+                                  f"-m {amst_ds_path} "
+                                  f"-c {cluster_label_file} "
+                                  f"-o {cluster_label_file_no_noise}")
+        add_cmd(cluster_assign_command, job_script)
+
+        echo_stage_name(
+            job_script,
+            "Evaluate clustering results after assigning clusters to noise points")
+        add_clustering_evaluation(
+            job_script, cluster_label_file_no_noise, amst_ds_path,
+            ground_truth_path, evaluator, ygm_cluster_eval,
+            num_tasks_per_node, verbose, singleton_cluster_to_noise_points)
+
+    job_script.write("echo \"\" \n")
+
 
 # Function to generate the batch script for running a benchmark
 #
@@ -267,59 +323,12 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
 
             # Run the HPC Clustering step
             for set_cmd in min_cluster_size_set_cmnds:
-                # Set the min cluster size environment variable for this run
-                add_cmd(set_cmd, job_script, False, False)
-
-                echo_stage_name(job_script, f"Running CLAMS-HDBSCAN")
-                job_script.write(
-                    f"echo \"Min cluster size ${{MIN_CLUSTER_SIZE}}\"\n")
-                if distributed_hdbscan:
-                    cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
-                    cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
-                    verbose_flag = '-v' if verbose else ''
-                    hpc_clustering_command = (f"{clustering_exe} {verbose_flag} -i {amst_ds_path} -M "
-                                            f" -m ${{MIN_CLUSTER_SIZE}} "
-                                            f" -o {cluster_label_file} "
-                                            f" -c {cluster_tree_file} "
-                                            f" -n {num_tasks_per_node}")
-                    add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
-                else:
-                    cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
-                    cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
-                    hpc_clustering_command = (f"{clustering_exe} -i {amst_ds_path} -M "
-                                            f" -m ${{MIN_CLUSTER_SIZE}} "
-                                            f" -o {cluster_label_file} "
-                                            f" -c {cluster_tree_file} "
-                                            f" -P ")
-                    add_cmd(hpc_clustering_command, job_script)
-
-                # Run the evaluation step
-                if ground_truth_path:
-                    echo_stage_name(job_script, "Evaluating Clustering Results")
-                    add_clustering_evaluation(
-                        job_script, cluster_label_file, amst_ds_path,
-                        ground_truth_path, evaluator,
-                        ygm_cluster_eval, num_tasks_per_node, verbose,
-                        singleton_cluster_to_noise_points)
-
-                    echo_stage_name(job_script, "Assign clusters to noise points")
-                    # Remove the .txt extension and add .noise_assigned.txt
-                    cluster_label_file_no_noise = f"{cluster_label_file[:-4]}.noise_assigned.txt"
-                    cluster_assign_command = (f"{noise_point_assigner_exe} -M "
-                                              f"-m {amst_ds_path} "
-                                              f"-c {cluster_label_file} "
-                                              f"-o {cluster_label_file_no_noise}")
-                    add_cmd(cluster_assign_command, job_script)
-
-                    echo_stage_name(job_script, "Evaluate clustering results after assigning clusters to noise points")
-                    add_clustering_evaluation(
-                        job_script, cluster_label_file_no_noise, amst_ds_path,
-                        ground_truth_path, evaluator,
-                        ygm_cluster_eval, num_tasks_per_node, verbose,
-                        singleton_cluster_to_noise_points)
-
-
-                job_script.write(f"echo \"\" \n")
+                run_clustering(
+                    job_script, set_cmd, work_dir, amst_approx_bound,
+                    amst_ds_path, clustering_exe, distributed_hdbscan,
+                    evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
+                    ground_truth_path, singleton_cluster_to_noise_points,
+                    noise_point_assigner_exe)
             try_no += 1
 
     # If the file was not created, return an error

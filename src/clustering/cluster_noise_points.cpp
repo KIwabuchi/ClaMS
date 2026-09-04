@@ -27,8 +27,6 @@ using namespace clams;
 template <typename K, typename V>
 using map_t = boost::unordered::unordered_flat_map<K, V>;
 
-static constexpr id_t k_noise_cluster_id = static_cast<id_t>(-1);
-
 struct option {
   std::filesystem::path mst_edges_path;
   bool                  metall_mst{false};
@@ -72,49 +70,6 @@ void parse_option(int argc, char* argv[], option& opt) {
         show_help();
         std::exit(EXIT_FAILURE);
     }
-  }
-}
-
-void read_cluster_ids(const std::filesystem::path& input_path,
-                      map_t<id_t, id_t>&           point_cluster_map) {
-  spdlog::info("Reading cluster IDs from {}", input_path.string());
-  std::ifstream ifs(input_path);
-  if (!ifs) {
-    std::cerr << "Failed to open " << input_path << std::endl;
-    std::abort();
-  }
-
-  std::string line;
-  while (std::getline(ifs, line)) {
-    if (line.empty() || line[0] == '#') {
-      continue;  // Skip empty lines and comments
-    }
-    std::istringstream iss(line);
-    id_t               point_id, cluster_id;
-    if (!(iss >> point_id >> cluster_id)) {
-      std::cerr << "Error parsing line: " << line << std::endl;
-      std::abort();
-    }
-    point_cluster_map[point_id] = cluster_id;
-  }
-}
-
-void dump_point_cluster_ids(const map_t<id_t, id_t>&     cluster_id,
-                            const std::filesystem::path& output_path) {
-  std::ofstream ofs(output_path);
-  if (!ofs) {
-    std::cerr << "Failed to open " << output_path << std::endl;
-    std::abort();
-  }
-
-  for (const auto& [i, final_cluster_id] : cluster_id) {
-    ofs << i << "\t" << final_cluster_id;
-    ofs << "\n";
-  }
-  ofs.close();
-  if (!ofs) {
-    std::cerr << "Failed to write to " << output_path << std::endl;
-    std::abort();
   }
 }
 
@@ -180,8 +135,10 @@ int main(int argc, char* argv[]) {
     }
     ++n_noise_points;
 
-    std::deque<id_t> bfs_queue;
+    std::deque<id_t>  bfs_queue;
+    map_t<id_t, bool> visited;
     bfs_queue.push_back(point_id);
+    visited[point_id]  = true;
     bool found_cluster = false;
 
     while (!bfs_queue.empty() && !found_cluster) {
@@ -189,12 +146,16 @@ int main(int argc, char* argv[]) {
       bfs_queue.pop_front();
 
       for (const auto neighbor_id : mst.at(current_point_id)) {
+        if (visited.find(neighbor_id) != visited.end()) {
+          continue;  // Already visited, e.g., the node we came from
+        }
         if (point_cluster_map.at(neighbor_id) != k_noise_cluster_id) {
           point_cluster_map[point_id] = point_cluster_map.at(neighbor_id);
           found_cluster               = true;
           ++n_assigned_points;
           break;
         } else {
+          visited[neighbor_id] = true;
           bfs_queue.push_back(neighbor_id);
         }
       }
@@ -205,9 +166,10 @@ int main(int argc, char* argv[]) {
     }
   }
   spdlog::info("Finished assigning cluster IDs to noise points");
-  spdlog::info("Number of noise points: {}", n_noise_points);
-  spdlog::info("Number of noise points assigned to clusters: {}",
-               n_assigned_points);
+  spdlog::info("Number of noise points in the original data: {}",
+               n_noise_points);
+  spdlog::info("Number of remaining noise points: {}",
+               n_noise_points - n_assigned_points);
 
   dump_point_cluster_ids(point_cluster_map, opt.cluster_ids_out_path);
   spdlog::info("Dumped point cluster IDs to {}",

@@ -10,17 +10,23 @@ import os
 
 # Modified from:
 # https://gist.github.com/lmcinnes/24ed5c22c80125be5133811d677eae7b
-def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points=False):
+def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points=False, ignore_true_noise_points=False):
     max_cluster_id = max(np.max(cluster_labels), np.max(true_labels))
 
     if np.any(true_labels < 0):
         print("Ground truth labels contain noise points")
         pct_clustered_gt = (np.sum(true_labels >= 0) / cluster_labels.shape[0])
         print(f"GT clustered Points: {pct_clustered_gt * 100:.2f}%")
-        print(
-            "Assigning a singleton cluster to each noise point in the ground truth labels")
-        true_labels = assign_singleton_cluster_to_noise_points(true_labels, max_cluster_id)
-        max_cluster_id = max(max_cluster_id, np.max(true_labels))
+
+        if ignore_true_noise_points:
+            print("Remove true noise points from the evaluation")
+            print(f"Before filtering: {len(true_labels)} points")
+            mask = true_labels >= 0
+            true_labels = true_labels[mask]
+            cluster_labels = cluster_labels[mask]
+            max_cluster_id = max(np.max(cluster_labels), np.max(true_labels))
+            print(f"After filtering: {len(true_labels)} points")
+
 
     if np.any(cluster_labels < 0):  # Has noise points
         clustered_points = (cluster_labels >= 0)

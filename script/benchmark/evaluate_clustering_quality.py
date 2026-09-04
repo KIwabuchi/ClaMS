@@ -41,7 +41,7 @@ from clustering_utilities import *
 
 def parse_options():
     parser = argparse.ArgumentParser(
-        description='Evaluate kNN index')
+        description='Evaluate clustering quality')
 
     parser.add_argument('-c', '--cluster',
                         dest='cluster_path',
@@ -52,7 +52,10 @@ def parse_options():
                         required=True, action='store', type=str,
                         help='Path to file or directory containing ground truth labels')
     parser.add_argument('-s', '--singleton_noise_points', action='store_true',
-                        help='Assign a singleton cluster to each noise point in the clustering result.')
+                        help='Assign a singleton cluster to each noise point in the clustering labels to evaluate.')
+    parser.add_argument('-T', '--ignore_true_noise_points', action='store_true',
+                        help='Remove true noise points from the evaluation.')
+
     args = parser.parse_args()
     return args
 
@@ -64,10 +67,7 @@ def main():
     true_labels = read_label_data(opt.gt_path)
 
     try:
-        eval_clusters(cluster_labels, true_labels, False)
-        contains_noise_points = np.any(cluster_labels == -1)
-        if opt.singleton_noise_points and contains_noise_points:
-            eval_clusters(cluster_labels, true_labels, True)
+        eval_clusters(cluster_labels, true_labels, opt.singleton_noise_points, opt.ignore_true_noise_points)
     except Exception as e:
         print(f"Error: {e}")
         exit(1)

@@ -6,3 +6,9 @@ setup_saltatlas_target(conv_knng_to_mreach_dist)
 
 add_basic_executable(copy_pm_datastore copy_pm_datastore.cpp)
 setup_saltatlas_target(copy_pm_datastore)
+
+add_basic_executable(evaluate_correlation_knng_and_clusters
+                     evaluate_correlation_knng_and_clusters.cpp)
+setup_omp_target(evaluate_correlation_knng_and_clusters)
+setup_metall_target(evaluate_correlation_knng_and_clusters)
+setup_spdlog_target(evaluate_correlation_knng_and_clusters)

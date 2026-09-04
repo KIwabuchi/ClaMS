@@ -22,6 +22,8 @@
 
 namespace clams {
 
+static constexpr id_t k_noise_cluster_id = static_cast<id_t>(-1);
+
 inline std::vector<std::filesystem::path> find_files(
     const std::filesystem::path &path) {
   std::vector<std::filesystem::path> files;
@@ -159,4 +161,60 @@ inline void read_knng_edges(
     }
   }
 }
+
+/// Reads point-to-cluster assignments from `input_path` into
+/// `point_cluster_map`.
+///
+/// Each nonempty, noncomment input line must contain a point ID followed by its
+/// cluster ID, separated by whitespace. Lines whose first character is `#` are
+/// ignored. The output maps each point ID to its cluster ID; if an ID occurs
+/// more than once, the last assignment wins.
+template <typename cluster_id_table_t>
+void read_cluster_ids(const std::filesystem::path &input_path,
+                      cluster_id_table_t          &point_cluster_map) {
+  using id_t         = typename cluster_id_table_t::key_type;
+  using cluster_id_t = typename cluster_id_table_t::mapped_type;
+
+  std::ifstream ifs(input_path);
+  if (!ifs) {
+    std::cerr << "Failed to open " << input_path << std::endl;
+    std::abort();
+  }
+
+  std::string line;
+  while (std::getline(ifs, line)) {
+    if (line.empty() || line[0] == '#') {
+      continue;  // Skip empty lines and comments
+    }
+    std::istringstream iss(line);
+    id_t               point_id;
+    cluster_id_t       cluster_id;
+    if (!(iss >> point_id >> cluster_id)) {
+      std::cerr << "Error parsing line: " << line << std::endl;
+      std::abort();
+    }
+    point_cluster_map[point_id] = cluster_id;
+  }
+}
+
+template <typename cluster_id_table_t>
+void dump_point_cluster_ids(const cluster_id_table_t    &cluster_id,
+                            const std::filesystem::path &output_path) {
+  std::ofstream ofs(output_path);
+  if (!ofs) {
+    std::cerr << "Failed to open " << output_path << std::endl;
+    std::abort();
+  }
+
+  for (const auto &[i, final_cluster_id] : cluster_id) {
+    ofs << i << "\t" << final_cluster_id;
+    ofs << "\n";
+  }
+  ofs.close();
+  if (!ofs) {
+    std::cerr << "Failed to write to " << output_path << std::endl;
+    std::abort();
+  }
+}
+
 }  // namespace clams

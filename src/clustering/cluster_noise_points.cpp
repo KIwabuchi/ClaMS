@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
                        opt.mst_edges_path.string());
       std::abort();
     }
-    spdlog::info("#of MST edges: {}", input_mst_edges.size());
+    spdlog::info("#of MST edges: {}", input_mst_edges->size());
     spdlog::info("Copying MST edges from Metall datastore");
     for (const auto& edge : *input_mst_edges) {
       mst_graph[edge.ids[0]].push_back(edge.ids[1]);
@@ -117,7 +117,7 @@ int main(int argc, char* argv[]) {
 
   map_t<id_t, id_t> point_cluster_map;
   read_cluster_ids(opt.cluster_ids_input_path, point_cluster_map);
-  spdlog::info("Read {} point cluster IDs from {}", point_cluster_map.size(),
+  spdlog::info("Read {} points' cluster IDs from {}", point_cluster_map.size(),
                opt.cluster_ids_input_path.string());
 
   std::vector<id_t> point_ids;

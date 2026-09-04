@@ -128,6 +128,10 @@ int main(int argc, char* argv[]) {
 
   spdlog::info(
       "Assigning cluster IDs to noise points by traversing the MST edges");
+  // Start a timer to measure the time taken for assigning cluster IDs to noise
+  // points
+  auto kernel_timer = spdlog::stopwatch();
+
   std::size_t n_noise_points    = 0;
   std::size_t n_assigned_points = 0;
   // NOTE: this algorithm is not determinstic because threads update the shared
@@ -172,7 +176,9 @@ int main(int argc, char* argv[]) {
       spdlog::warn("Point {} could not be assigned to any cluster.", point_id);
     }
   }
-  spdlog::info("Finished assigning cluster IDs to noise points");
+  const auto kernel_elapsed_time = kernel_timer.elapsed();
+  spdlog::info("Finished assigning cluster IDs to noise points {}s",
+               kernel_elapsed_time.count());
   spdlog::info("Number of noise points in the original data: {}",
                n_noise_points);
   spdlog::info("Number of remaining noise points: {}",

@@ -11,6 +11,8 @@ import os
 # Modified from:
 # https://gist.github.com/lmcinnes/24ed5c22c80125be5133811d677eae7b
 def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points=False, ignore_true_noise_points=False):
+    print(f"Assigning singleton clusters to noise points: {singleton_cluster_to_noise_points}")
+    print(f"Ignore true noise points in the ground truth: {ignore_true_noise_points}")
     max_cluster_id = max(np.max(cluster_labels), np.max(true_labels))
 
     if np.any(true_labels < 0):
@@ -27,7 +29,11 @@ def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points
             max_cluster_id = max(np.max(cluster_labels), np.max(true_labels))
             print(f"After filtering: {len(true_labels)} ground truth points")
 
-    if np.any(cluster_labels < 0):  # Has noise points
+    non_noise_points_mask = (cluster_labels >= 0)
+    pct_clustered = (np.sum(non_noise_points_mask) / cluster_labels.shape[0])
+    print(f"Cluster coverage (%): {pct_clustered * 100:.2f}")
+
+    if len(non_noise_points_mask) < cluster_labels.shape[0]:  # Has noise points
         if singleton_cluster_to_noise_points:
             print(
                 "Assigning a singleton cluster to each noise point in the clustering result")
@@ -36,19 +42,16 @@ def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points
             ami = adjusted_mutual_info_score(true_labels, cluster_labels)
         else:
             print("Noise points are ignored in the evaluation")
-            non_noise_points = (cluster_labels >= 0)
-            pct_clustered = (np.sum(non_noise_points) / cluster_labels.shape[0])
-            print(f"Cluster coverage (%): {pct_clustered * 100:.2f}")
-            ari = adjusted_rand_score(true_labels[non_noise_points],
-                                    cluster_labels[non_noise_points])
-            ami = adjusted_mutual_info_score(true_labels[non_noise_points],
-                                            cluster_labels[non_noise_points])
-            # sil = silhouette_score(raw_data[non_noise_points], cluster_labels[non_noise_points])
+            ari = adjusted_rand_score(true_labels[non_noise_points_mask],
+                                    cluster_labels[non_noise_points_mask])
+            ami = adjusted_mutual_info_score(true_labels[non_noise_points_mask],
+                                            cluster_labels[non_noise_points_mask])
+            # sil = silhouette_score(raw_data[non_noise_points_mask], cluster_labels[non_noise_points_mask])
     else:
+        print(f"No noise points in the clustering result")
         ari = adjusted_rand_score(true_labels, cluster_labels)
         ami = adjusted_mutual_info_score(true_labels, cluster_labels)
         # sil = silhouette_score(raw_data, cluster_labels)
-        print(f"No noise points in the clustering result")
 
     print(f"ARI: {ari:.4f}")
     print(f"AMI: {ami:.4f}")

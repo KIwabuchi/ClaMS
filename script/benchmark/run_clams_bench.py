@@ -56,6 +56,8 @@ def parse_options():
                         help='Use NEO-DNND (build_knng_neo) instead of build_knng.')
     parser.add_argument('--neodnnd_threads', type=int, default=2,
                         help='Number of threads to use for NEO-DNND. Ignored if --neodnnd is not specified.')
+    parser.add_argument('--neodnnd_replicate_rate', type=float, default=0.0,
+                        help='The replicate rate for NEO-DNND. Ignored if --neodnnd is not specified. See NEO-DNND\'s documentation for details.')
     parser.add_argument('--nng_r', type=float, default=0.5,
                         help='The r (sampling) parameter for KNNG construction.')
     parser.add_argument('--nng_delta', type=float, default=0.0001,
@@ -159,18 +161,25 @@ def generate_job_name():
     time.sleep(2)
     return f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
+stage_name_stack = []  # Stack to store stage names for logging
+def echo_stage_name(job_script, stage_name):
+    job_script.write("echo\n")
+    job_script.write(f"echo ================================\n")
+    job_script.write(f"echo \"{stage_name}\": $(date \"+%Y/%m/%d %H:%M:%S\")\n")
+    job_script.write(f"echo ================================\n")
+    stage_name_stack.append(stage_name)  # Add the stage name to the queue
+
+def finish_stage(job_script):
+    if stage_name_stack:
+        stage_name = stage_name_stack.pop()  # Get the last stage name from the stack
+        job_script.write(f"echo \"Finished {stage_name}: $(date \"+%Y/%m/%d %H:%M:%S\")\"\n")
+        job_script.write("echo\n")
 
 def add_clustering_evaluation(job_script, cluster_label_file, amst_ds_path,
                               ground_truth_path, evaluator,
                               ygm_cluster_eval,
                               num_tasks_per_node, verbose,
                               singleton_cluster_to_noise_points):
-    job_script.write("echo\n")
-    job_script.write("date\n")
-    job_script.write(f"echo ================================\n")
-    job_script.write(f"echo \"Evaluating Clustering\"\n")
-    job_script.write(f"echo ================================\n")
-
     if ygm_cluster_eval:
         job_script.write("echo \"Evaluating Clustering using YGM\"\n")
         verbose_flag = " -v" if verbose else ""
@@ -187,6 +196,66 @@ def add_clustering_evaluation(job_script, cluster_label_file, amst_ds_path,
         if singleton_cluster_to_noise_points:
             evaluation_command += " -s"
         add_cmd(evaluation_command, job_script)
+
+def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
+                       amst_ds_path, clustering_exe, distributed_hdbscan,
+                       evaluator, ygm_cluster_eval, num_tasks_per_node,
+                       verbose, ground_truth_path,
+                       singleton_cluster_to_noise_points,
+                       noise_point_assigner_exe):
+    # Set the min cluster size environment variable for this run
+    add_cmd(set_cmd, job_script, False, False)
+
+    echo_stage_name(job_script, "Running CLAMS-HDBSCAN")
+    job_script.write(f"echo \"Min cluster size ${{MIN_CLUSTER_SIZE}}\"\n")
+    if distributed_hdbscan:
+        cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
+        cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
+        verbose_flag = '-v' if verbose else ''
+        hpc_clustering_command = (f"{clustering_exe} {verbose_flag} -i {amst_ds_path} -M "
+                                  f" -m ${{MIN_CLUSTER_SIZE}} "
+                                  f" -o {cluster_label_file} "
+                                  f" -c {cluster_tree_file} "
+                                  f" -n {num_tasks_per_node}")
+        add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
+    else:
+        cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
+        cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
+        hpc_clustering_command = (f"{clustering_exe} -i {amst_ds_path} -M "
+                                  f" -m ${{MIN_CLUSTER_SIZE}} "
+                                  f" -o {cluster_label_file} "
+                                  f" -c {cluster_tree_file} "
+                                  f" -P ")
+        add_cmd(hpc_clustering_command, job_script)
+    finish_stage(job_script)
+
+    if ground_truth_path:
+        echo_stage_name(job_script, "Evaluating Clustering Results")
+        job_script.write(f"echo \"MST-based cluster guess: False\"\n")
+        add_clustering_evaluation(
+            job_script, cluster_label_file, amst_ds_path, ground_truth_path,
+            evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
+            singleton_cluster_to_noise_points)
+        finish_stage(job_script)
+
+        echo_stage_name(job_script, "Assign clusters to noise points")
+        cluster_label_file_no_noise = f"{cluster_label_file[:-4]}.noise_assigned.txt"
+        cluster_assign_command = (f"{noise_point_assigner_exe} -M "
+                                  f"-m {amst_ds_path} "
+                                  f"-c {cluster_label_file} "
+                                  f"-o {cluster_label_file_no_noise}")
+        add_cmd(cluster_assign_command, job_script)
+        finish_stage(job_script)
+
+        echo_stage_name(job_script, "Evaluate clustering results")
+        job_script.write(f"echo \"MST-based cluster guess: True\"\n")
+        add_clustering_evaluation(
+            job_script, cluster_label_file_no_noise, amst_ds_path,
+            ground_truth_path, evaluator, ygm_cluster_eval,
+            num_tasks_per_node, verbose, singleton_cluster_to_noise_points)
+        finish_stage(job_script)
+
+    job_script.write("echo \"\" \n")
 
 
 # Function to generate the batch script for running a benchmark
@@ -220,25 +289,23 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
 
         # Set up the batch script header
         set_up_batch_header(job_script, job_name, job_dir, num_nodes)
+        job_script.write(f"echo \"Compute nodes: {num_nodes}\"\n")
+        job_script.write(f"echo \"Tasks per node: {num_tasks_per_node}\"\n")
 
         add_cmd(f'mkdir -p {work_dir}', job_script, True, False)
 
         # Run the DNND step
-        job_script.write("echo\n")
-        job_script.write("date\n")
+        job_script.write(f"echo \"kNNG k: {nng_k}\"\n")
         if len(input_dnnd_ds_path) == 0:
-            job_script.write(f"echo ================================\n")
-            job_script.write(f"echo \"Building KNNG\"\n")
-            job_script.write(f"echo ================================\n")
+            echo_stage_name(job_script, "Building KNNG")
             dnnd_ds_path = f"{work_dir}/dnnd_pm_datastore"
             dnnd_batch_size = 2 ** 25
             verbose_flag = '-v' if verbose else ''
             dnnd_command = f"{dnnd_exe} {verbose_flag} -k {nng_k} -r {nng_r} -d {nng_delta} -f {distance_func} -o {dnnd_ds_path} -b {dnnd_batch_size} -p {points_file_format} {point_path}"
             add_srun_cmd(num_tasks_per_node, dnnd_command, job_script)
+            finish_stage(job_script)
             if backup_knng:
                 dnnd_ds_path_backup = f"{dnnd_ds_path}_backup"
-                job_script.write(f"echo\n")
-                job_script.write("date\n")
                 job_script.write(f"echo \"Backing up KNNG datastore\"\n")
                 backup_knng_command = f"cp -r {dnnd_ds_path} {dnnd_ds_path_backup}"
                 add_cmd(backup_knng_command, job_script)
@@ -248,103 +315,41 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             dnnd_ds_path = input_dnnd_ds_path
 
         # Connect the CCs
-        job_script.write("echo\n")
-        job_script.write("date\n")
-        job_script.write(f"echo ================================\n")
-        job_script.write(f"echo \"Running MFC\"\n")
-        job_script.write(f"echo ================================\n")
+        echo_stage_name(job_script, "Connecting the CCs using MFC")
         mfc_command = f"{mfc_exe} -d {dnnd_ds_path} -f {distance_func}"
         add_srun_cmd(num_tasks_per_node, mfc_command, job_script)
+        finish_stage(job_script)
 
         # Convert to core distance
         # TODO: Implement
         if False and min_samples > 0:
-            job_script.write("echo\n")
-            job_script.write("date\n")
-            job_script.write(f"echo ================================\n")
-            job_script.write(f"echo Convert to core distance kNNG\n")
-            job_script.write(f"echo ================================\n")
+            echo_stage_name(job_script, "Convert to core distance kNNG")
             knng_coredist_dir = f"{work_dir}/knng_coredist/"
             add_cmd(f'mkdir -p {knng_coredist_dir}', job_script)
             conv2coredist_cmd = f"./src/conv_knng_to_core_dist -i {dnnd_ds_path} -o {knng_coredist_dir}/knng.txt -m {min_samples}"
             add_cmd(conv2coredist_cmd, job_script)
+            finish_stage(job_script)
 
         try_no = 0
         for amst_approx_bound in amst_approx_bound_list:
             # Run the AMST step
-            job_script.write("echo\n")
-            job_script.write("date\n")
-            job_script.write(f"echo ================================\n")
-            job_script.write(f"echo \"Running AMST, approx bound = {amst_approx_bound}\"\n")
-            job_script.write(f"echo ================================\n")
+            echo_stage_name(job_script, f"Running AMST, approx bound = {amst_approx_bound}")
             amst_ds_path = f"{work_dir}/amst_pm_datastore_a{amst_approx_bound}"
             amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path} -e {amst_approx_bound}"
             add_srun_cmd(num_tasks_per_node, amst_command, job_script)
+            finish_stage(job_script)
 
             # Run the HPC Clustering step
             for set_cmd in min_cluster_size_set_cmnds:
-                # Set the min cluster size environment variable for this run
-                add_cmd(set_cmd, job_script, False, False)
-
-                job_script.write("echo\n")
-                job_script.write("date\n")
-                job_script.write(f"echo ================================\n")
-                job_script.write(f"echo \"Running CLAMS-HDBSCAN, min cluster size = ${{MIN_CLUSTER_SIZE}}\"\n")
-                job_script.write(f"echo ================================\n")
-
-                job_script.write(
-                    f"echo \"Min cluster size ${{MIN_CLUSTER_SIZE}}\"\n")
-                if distributed_hdbscan:
-                    cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
-                    cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
-                    verbose_flag = '-v' if verbose else ''
-                    hpc_clustering_command = (f"{clustering_exe} {verbose_flag} -i {amst_ds_path} -M "
-                                            f" -m ${{MIN_CLUSTER_SIZE}} "
-                                            f" -o {cluster_label_file} "
-                                            f" -c {cluster_tree_file} "
-                                            f" -n {num_tasks_per_node}")
-                    add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
-                else:
-                    cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
-                    cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
-                    hpc_clustering_command = (f"{clustering_exe} -i {amst_ds_path} -M "
-                                            f" -m ${{MIN_CLUSTER_SIZE}} "
-                                            f" -o {cluster_label_file} "
-                                            f" -c {cluster_tree_file} "
-                                            f" -P ")
-                    add_cmd(hpc_clustering_command, job_script)
-
-                # Run the evaluation step
-                if ground_truth_path:
-                    add_clustering_evaluation(
-                        job_script, cluster_label_file, amst_ds_path,
-                        ground_truth_path, evaluator,
-                        ygm_cluster_eval, num_tasks_per_node, verbose,
-                        singleton_cluster_to_noise_points)
-
-                    job_script.write("echo\n")
-                    job_script.write("date\n")
-                    job_script.write(f"echo ================================\n")
-                    job_script.write(f"echo \"Assign clusters to noise points\"\n")
-                    job_script.write(f"echo ================================\n")
-                    # Remove the .txt extension and add .noise_assigned.txt
-                    cluster_label_file_no_noise = f"{cluster_label_file[:-4]}.noise_assigned.txt"
-                    cluster_assign_command = (f"{noise_point_assigner_exe} -M "
-                                              f"-m {amst_ds_path} "
-                                              f"-c {cluster_label_file} "
-                                              f"-o {cluster_label_file_no_noise}")
-                    add_cmd(cluster_assign_command, job_script)
-
-                    
-                    add_clustering_evaluation(
-                        job_script, cluster_label_file_no_noise, amst_ds_path,
-                        ground_truth_path, evaluator,
-                        ygm_cluster_eval, num_tasks_per_node, verbose,
-                        singleton_cluster_to_noise_points)
-
-
-                job_script.write(f"echo \"\" \n")
+                run_clustering(
+                    job_script, set_cmd, work_dir, amst_approx_bound,
+                    amst_ds_path, clustering_exe, distributed_hdbscan,
+                    evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
+                    ground_truth_path, singleton_cluster_to_noise_points,
+                    noise_point_assigner_exe)
             try_no += 1
+
+        finish_stage(job_script)
 
     # If the file was not created, return an error
     if not os.path.exists(job_script_path):
@@ -384,7 +389,7 @@ def main():
         if dnnd_exe == default_dnnd_exe:
             dnnd_exe = f'{os.getcwd()}/src/knng/build_knng_neo'
             # This is not the best way to set the number of threads for NEO-DNND, but it is a simple way to do it for now.
-            dnnd_exe = f'{dnnd_exe} -T {opts.neodnnd_threads}'
+            dnnd_exe = f'{dnnd_exe} -T {opts.neodnnd_threads} -R {opts.neodnnd_replicate_rate}'
 
     # Select HDBSCAN executable
     # If --distributed_hdbscan is sepecified and the user did not override --clustering_exe,

@@ -13,7 +13,7 @@ python3 ../script/run_hdbscan_bench.py -p ../dataset/usps/points.txt -m 10,15,20
 import argparse
 from clustering_utilities import *
 from script.benchmark.bench_utilities import *
-from hdbscan.run_hdbscan import run_hdbscan
+from script.benchmark.hdbscan.run_hdbscan import run_hdbscan
 
 
 def parse_options():

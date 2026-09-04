@@ -1,3 +1,6 @@
+// Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
+// Project Developers. See the top-level COPYRIGHT file for details.
+
 // Assign cluster IDs to noise points by traversing the MST edges.
 // Traverse the MST edges from each noise point in BFS manner until a point that
 // belongs to a cluster is found.
@@ -26,8 +29,6 @@ using namespace clams;
 
 template <typename K, typename V>
 using map_t = boost::unordered::unordered_flat_map<K, V>;
-
-static constexpr id_t k_noise_cluster_id = static_cast<id_t>(-1);
 
 struct option {
   std::filesystem::path mst_edges_path;
@@ -75,54 +76,11 @@ void parse_option(int argc, char* argv[], option& opt) {
   }
 }
 
-void read_cluster_ids(const std::filesystem::path& input_path,
-                      map_t<id_t, id_t>&           point_cluster_map) {
-  spdlog::info("Reading cluster IDs from {}", input_path.string());
-  std::ifstream ifs(input_path);
-  if (!ifs) {
-    std::cerr << "Failed to open " << input_path << std::endl;
-    std::abort();
-  }
-
-  std::string line;
-  while (std::getline(ifs, line)) {
-    if (line.empty() || line[0] == '#') {
-      continue;  // Skip empty lines and comments
-    }
-    std::istringstream iss(line);
-    id_t               point_id, cluster_id;
-    if (!(iss >> point_id >> cluster_id)) {
-      std::cerr << "Error parsing line: " << line << std::endl;
-      std::abort();
-    }
-    point_cluster_map[point_id] = cluster_id;
-  }
-}
-
-void dump_point_cluster_ids(const map_t<id_t, id_t>&     cluster_id,
-                            const std::filesystem::path& output_path) {
-  std::ofstream ofs(output_path);
-  if (!ofs) {
-    std::cerr << "Failed to open " << output_path << std::endl;
-    std::abort();
-  }
-
-  for (const auto& [i, final_cluster_id] : cluster_id) {
-    ofs << i << "\t" << final_cluster_id;
-    ofs << "\n";
-  }
-  ofs.close();
-  if (!ofs) {
-    std::cerr << "Failed to write to " << output_path << std::endl;
-    std::abort();
-  }
-}
-
 int main(int argc, char* argv[]) {
   option opt;
   parse_option(argc, argv, opt);
 
-  map_t<id_t, std::vector<id_t>> mst;
+  map_t<id_t, std::vector<id_t>> mst_graph;
   if (opt.metall_mst) {
     spdlog::info("Attaching MST in Metall datastore");
     metall::manager metall_manager(metall::open_read_only, opt.mst_edges_path);
@@ -134,24 +92,24 @@ int main(int argc, char* argv[]) {
                        opt.mst_edges_path.string());
       std::abort();
     }
+    spdlog::info("#of MST edges: {}", input_mst_edges->size());
     spdlog::info("Copying MST edges from Metall datastore");
     for (const auto& edge : *input_mst_edges) {
-      mst[edge.ids[0]].push_back(edge.ids[1]);
-      mst[edge.ids[1]].push_back(edge.ids[0]);
+      mst_graph[edge.ids[0]].push_back(edge.ids[1]);
+      mst_graph[edge.ids[1]].push_back(edge.ids[0]);
     }
-    spdlog::info("#of MST edges: {}", mst.size());
   } else {
     spdlog::info("Reading MST edges");
     weighted_edge_list_t input_mst_edges;
     read_edges(opt.mst_edges_path, input_mst_edges);
     spdlog::info("#of MST edges: {}", input_mst_edges.size());
     for (const auto& edge : input_mst_edges) {
-      mst[edge.ids[0]].push_back(edge.ids[1]);
-      mst[edge.ids[1]].push_back(edge.ids[0]);
+      mst_graph[edge.ids[0]].push_back(edge.ids[1]);
+      mst_graph[edge.ids[1]].push_back(edge.ids[0]);
     }
   }
 
-  if (mst.empty()) {
+  if (mst_graph.empty()) {
     spdlog::warn("No MST edges found in the input file or directory: {}",
                  opt.mst_edges_path.string());
     return EXIT_SUCCESS;
@@ -159,7 +117,7 @@ int main(int argc, char* argv[]) {
 
   map_t<id_t, id_t> point_cluster_map;
   read_cluster_ids(opt.cluster_ids_input_path, point_cluster_map);
-  spdlog::info("Read {} point cluster IDs from {}", point_cluster_map.size(),
+  spdlog::info("Read {} points' cluster IDs from {}", point_cluster_map.size(),
                opt.cluster_ids_input_path.string());
 
   std::vector<id_t> point_ids;
@@ -170,8 +128,15 @@ int main(int argc, char* argv[]) {
 
   spdlog::info(
       "Assigning cluster IDs to noise points by traversing the MST edges");
+  // Start a timer to measure the time taken for assigning cluster IDs to noise
+  // points
+  auto kernel_timer = spdlog::stopwatch();
+
   std::size_t n_noise_points    = 0;
   std::size_t n_assigned_points = 0;
+  // NOTE: this algorithm is not determinstic because threads update the shared
+  // point_cluster_map concurrently.
+  // We employ this algorithm because it is simple and fast.
   OMP_DIRECTIVE(parallel for reduction(+ : n_noise_points, n_assigned_points))
   for (size_t i = 0; i < point_ids.size(); ++i) {
     const auto point_id = point_ids.at(i);
@@ -190,11 +155,12 @@ int main(int argc, char* argv[]) {
       const auto current_point_id = bfs_queue.front();
       bfs_queue.pop_front();
 
-      for (const auto neighbor_id : mst.at(current_point_id)) {
+      for (const auto neighbor_id : mst_graph.at(current_point_id)) {
         if (visited.find(neighbor_id) != visited.end()) {
           continue;  // Already visited, e.g., the node we came from
         }
         if (point_cluster_map.at(neighbor_id) != k_noise_cluster_id) {
+          // Found a neighbor that belongs to a cluster
           point_cluster_map[point_id] = point_cluster_map.at(neighbor_id);
           found_cluster               = true;
           ++n_assigned_points;
@@ -210,7 +176,9 @@ int main(int argc, char* argv[]) {
       spdlog::warn("Point {} could not be assigned to any cluster.", point_id);
     }
   }
-  spdlog::info("Finished assigning cluster IDs to noise points");
+  const auto kernel_elapsed_time = kernel_timer.elapsed();
+  spdlog::info("Finished assigning cluster IDs to noise points {}s",
+               kernel_elapsed_time.count());
   spdlog::info("Number of noise points in the original data: {}",
                n_noise_points);
   spdlog::info("Number of remaining noise points: {}",

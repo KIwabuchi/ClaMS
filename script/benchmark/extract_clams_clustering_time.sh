@@ -18,7 +18,7 @@ if [[ $# -eq 0 ]]; then
   exit 1
 fi
 
-printf "kNNG k,nodes,tasks/node,kNNG (s),MFC (s),AMST (s),CLAMS-HDBSCAN (s),Assigning noise points (s),file\n"
+printf "kNNG k,nodes,tasks/node,kNNG (s),MFC (s),AMST (s),CLAMS-HDBSCAN (s),Noise clustering (s),file\n"
 
 for file in "$@"; do
   awk -v fname="$file" '

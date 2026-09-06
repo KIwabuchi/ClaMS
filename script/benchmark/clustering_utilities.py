@@ -30,10 +30,14 @@ def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points
             print(f"After filtering: {len(true_labels)} ground truth points")
 
     non_noise_points_mask = (cluster_labels >= 0)
-    pct_clustered = (np.sum(non_noise_points_mask) / cluster_labels.shape[0])
-    print(f"Cluster coverage (%): {pct_clustered * 100:.2f}")
+    num_non_noise_points = np.sum(non_noise_points_mask)
+    pct_clustered = (num_non_noise_points / cluster_labels.shape[0])
+    print(f"Cluster coverage (%): {pct_clustered * 100:.2f}%")
 
-    if len(non_noise_points_mask) < cluster_labels.shape[0]:  # Has noise points
+    # Make sure always num_non_noise_points <= cluster_labels.shape[0]
+    assert num_non_noise_points <= cluster_labels.shape[0]
+
+    if num_non_noise_points != cluster_labels.shape[0]:  # Has noise points
         if singleton_cluster_to_noise_points:
             print(
                 "Assigning a singleton cluster to each noise point in the clustering result")
@@ -99,7 +103,7 @@ def find_files_in_dir(dir_path, ext=''):
 # If the first column is not a point ID, set has_ids to False.
 # If there are multiple files in a directory, the point IDs must be present.
 def read_point_data(data_path, has_ids=True):
-    print(f"Loading data from {data_path}")
+    print(f"Loading data from {data_path}", flush=True)
     files = find_files_in_dir(data_path)
 
     if len(files) == 0:
@@ -137,7 +141,7 @@ def read_point_data(data_path, has_ids=True):
 
             points_table[pid] = list(map(float, items))
 
-    print(f"Loaded {len(points_table)} items from {len(files)} files")
+    print(f"Loaded {len(points_table)} items from {len(files)} files", flush=True)
 
     # numpy array of feature vectors
     # if the IDs are not continuous, fill the missing IDs with -1
@@ -167,7 +171,7 @@ def read_point_data(data_path, has_ids=True):
 #
 # Both File types can also contain comment lines, which must start from #.
 def read_label_data(data_path):
-    print(f"Loading data from {data_path}")
+    print(f"Loading data from {data_path}", flush=True)
     labels_dict = {}
     files = []
     if os.path.isdir(data_path):
@@ -186,9 +190,9 @@ def read_label_data(data_path):
             break
 
     if contains_ids:
-        print("Loading point IDs and labels")
+        print("Loading point IDs and labels", flush=True)
     else:
-        print("Loading only labels")
+        print("Loading only labels", flush=True)
 
     if len(files) > 1 and not contains_ids:
         print("Multiple files are provided,"
@@ -220,8 +224,8 @@ def read_label_data(data_path):
                 exit(1)
             labels_dict[pid] = label
 
-    print(f"Loaded {len(labels_dict)} items from {len(files)} files")
-    print(f"Max ID: {max_id}")
+    print(f"Loaded {len(labels_dict)} items from {len(files)} files", flush=True)
+    print(f"Max ID: {max_id}", flush=True)
 
     # numpy array of labels
     # if the IDs are not continuous, fill the missing IDs with -1

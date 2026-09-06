@@ -8,7 +8,7 @@ general approach taken is to take the standard HDBSCAN algorithm and swap compon
 non-Euclidean data for scalable primitives. This often requires resorting to algorithms that are approximations of what
 is done in HDBSCAN, sometimes without approximation guarantees.
 
-Note: This code works best if the input data is de-duplicated, with exact duplicate points removed. 
+Note: This code works best if the input data is de-duplicated, with exact duplicate points removed.
 If not, HDBSCAN will identify clusters with duplicate points as highly stable and always select them.
 
 
@@ -84,7 +84,7 @@ source ./venv/bin/activate
 # In clams/build
 # -m: min cluster size
 # -s: min samples
-python3 ../script/benchmark/hdbscan/run_hdbscan.py -m 10 -s 5 -p ../dataset/fashion-mnist/points.txt -g ../dataset/fashion-mnist/labels.txt
+python3 ../script/benchmark/hdbscan_benchmark/run_hdbscan.py -m 10 -s 5 -p ../dataset/fashion-mnist/points.txt -g ../dataset/fashion-mnist/labels.txt
 ```
 
 # License

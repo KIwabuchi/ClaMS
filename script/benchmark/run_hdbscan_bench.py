@@ -11,9 +11,13 @@ python3 ../script/run_hdbscan_bench.py -p ../dataset/usps/points.txt -m 10,15,20
 """
 
 import argparse
+import hdbscan
+import os
+import numpy as np
+import time
+
 from clustering_utilities import *
-from script.benchmark.bench_utilities import *
-from script.benchmark.hdbscan.run_hdbscan import run_hdbscan
+from bench_utilities import *
 
 
 def parse_options():
@@ -67,8 +71,86 @@ def parse_options():
     return args
 
 
+def run_hdbscan_kernel(points, min_cluster_size, min_samples,
+                       gen_min_span_tree=False):
+    clusters = hdbscan.HDBSCAN(gen_min_span_tree=gen_min_span_tree,
+                               min_cluster_size=min_cluster_size,
+                               min_samples=min_samples,
+                               core_dist_n_jobs=-1)
+    print(f'\nStart clustering', flush=True)
+    show_time_now()
+    # start timer
+    start_time = time.time()
+    clusters.fit(points)
+    print(f'Finish clustering in {time.time() - start_time:.2f} seconds', flush=True)
+    show_time_now()
+
+    return clusters
+
+
+def run_hdbscan(points, min_cluster_size, min_samples,
+                cluster_labels_out_path='out_clusters.txt',
+                gt_file=None,
+                mst_out_path=None,
+                condensed_tree_out_path=None,
+                cluster_persistence_out_path=None,
+                assign_cluster_to_noise=False):
+    clusters = run_hdbscan_kernel(points, min_cluster_size, min_samples,
+                                  gen_min_span_tree=(mst_out_path is not None))
+
+    # Evaluate the clustering quality
+    if gt_file:
+        print('\nLoading ground truth data')
+        gt_labels = read_label_data(gt_file)
+
+        print('\nEvaluating clustering quality')
+        eval_clusters(clusters.labels_, gt_labels)
+
+        if assign_cluster_to_noise:
+            print('\nAssigning a cluster ID to every noise point')
+            no_noise_labels = assign_singleton_cluster_to_noise_point(
+                clusters.labels_)
+            eval_clusters(no_noise_labels, gt_labels)
+
+    # Save the condensed tree data
+    if condensed_tree_out_path:
+        print(f'\nSaving condensed tree data in {condensed_tree_out_path}')
+        clusters.condensed_tree_.to_pandas().to_csv(condensed_tree_out_path)
+
+    # Save the MST data
+    if mst_out_path:
+        print(f'\nSaving MST data in {mst_out_path}')
+        with open(mst_out_path, 'w') as fout_mst:
+            mst = clusters.minimum_spanning_tree_.to_numpy()
+            # Format: Point0, Point1, Distance
+            for edge in mst:
+                fout_mst.write(f'{int(edge[0])}\t{int(edge[1])}\t{edge[2]}\n')
+            fout_mst.close()
+            show_time_now()
+
+    # Save the cluster IDs.
+    if cluster_labels_out_path:
+        print(f'\nSaving cluster IDs in {cluster_labels_out_path}')
+        with open(cluster_labels_out_path, 'w') as fout:
+            fout.write(f'# Node ID\tCluster ID\n')
+            for i, label in enumerate(clusters.labels_):
+                fout.write(f'{i}\t{label}\n')
+            show_time_now()
+            print(f'Cluster IDs are saved in {cluster_labels_out_path}')
+
+    # Save the cluster persistence data
+    if cluster_persistence_out_path:
+        print(
+            f'\nSaving cluster persistence data in {cluster_persistence_out_path}')
+        with open(cluster_persistence_out_path, 'w') as fout:
+            fout.write('Cluster ID\tPersistence\n')
+            for i, persistence in enumerate(clusters.cluster_persistence_):
+                fout.write(f'{i}\t{persistence}\n')
+
+
 def main():
     opts = parse_options()
+
 
     points = read_point_data(opts.point_data_path, opts.has_ids)
 
@@ -77,9 +159,9 @@ def main():
 
     for min_cluster_size in min_cluster_size_list:
         for min_samples in min_samples_list:
-            print(f'\n--------------------------------')
-            print((f"min_cluster_size: {min_cluster_size}"))
-            print((f"min_samples: {min_samples}"))
+            print(f'\n--------------------------------', flush=True)
+            print((f"min_cluster_size: {min_cluster_size}"), flush=True)
+            print((f"min_samples: {min_samples}"), flush=True)
             run_hdbscan(points, min_cluster_size, min_samples,
                         gt_file=opts.gt_file,
                         cluster_labels_out_path=opts.cluster_labels_out_path,

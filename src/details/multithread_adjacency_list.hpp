@@ -12,22 +12,15 @@
 
 #pragma once
 
-#include <cassert>
-#include <mutex>
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <functional>
+#include <mutex>
 
-#define CLAMS_USE_STL_CONTAINERS_IN_ADJLIST 0
-#if CLAMS_USE_STL_CONTAINERS_IN_ADJLIST
-#include <vector>
-#include <unordered_map>
-#include <scoped_allocator>
-#else
 #include <metall/container/scoped_allocator.hpp>
-#include <metall/container/unordered_map.hpp>
+#include <metall/container/unordered_node_map.hpp>
 #include <metall/container/vector.hpp>
-#endif
 
 #include <metall/utility/hash.hpp>
 #include <metall/utility/mutex.hpp>
@@ -35,19 +28,15 @@
 namespace clams {
 
 namespace {
-#if CLAMS_USE_STL_CONTAINERS_IN_ADJLIST
-namespace container = std;
-#else
 namespace container = metall::container;
-#endif
-}
+}  // namespace
 
 template <typename _key_type, typename _value_type,
           typename _base_allocator_type = std::allocator<std::byte>>
 class multithread_adjacency_list {
  public:
-  using key_type = _key_type;
-  using value_type = _value_type;
+  using key_type                           = _key_type;
+  using value_type                         = _value_type;
   static constexpr std::size_t k_num_banks = 1024;
 
  private:
@@ -60,10 +49,9 @@ class multithread_adjacency_list {
 
   using key_table_allocator_type = container::scoped_allocator_adaptor<
       other_allocator_type<std::pair<const key_type, list_type>>>;
-  using key_table_type =
-      container::unordered_map<key_type, list_type, metall::utility::hash<>,
-                               std::equal_to<key_type>,
-                               key_table_allocator_type>;
+  using key_table_type = container::unordered_node_map<
+      key_type, list_type, metall::utility::hash<>, std::equal_to<key_type>,
+      key_table_allocator_type>;
 
   using bank_table_allocator_type =
       container::scoped_allocator_adaptor<other_allocator_type<key_table_type>>;
@@ -74,10 +62,10 @@ class multithread_adjacency_list {
   class impl_const_key_iterator;
 
  public:
-  using const_key_iterator = impl_const_key_iterator;
-  using value_iterator = typename list_type::iterator;
-  using const_value_iterator = typename list_type::const_iterator;
-  using local_key_iterator = typename key_table_type::iterator;
+  using const_key_iterator       = impl_const_key_iterator;
+  using value_iterator           = typename list_type::iterator;
+  using const_value_iterator     = typename list_type::const_iterator;
+  using local_key_iterator       = typename key_table_type::iterator;
   using const_local_key_iterator = typename key_table_type::const_iterator;
 
   explicit multithread_adjacency_list(
@@ -90,14 +78,7 @@ class multithread_adjacency_list {
     auto guard =
         metall::utility::mutex::mutex_lock<k_num_banks>(bank_index(key));
 #ifdef __clang__
-#if CLAMS_USE_STL_CONTAINERS_IN_ADJLIST
     m_bank_table[bank_index(key)][key].emplace_back(std::move(value));
-#else
-    m_bank_table[bank_index(key)][key].emplace_back(std::move(value));
-    //    m_bank_table[bank_index(key)].try_emplace(key,
-    //    list_allocator_type(m_bank_table.get_allocator()));
-    //    m_bank_table[bank_index(key)].at(key).emplace_back(std::move(value));
-#endif
 #else
     // MEMO: GCC does not work with STL Containers (tested with GCC 10.2.0 on
     // MacOS)
@@ -105,6 +86,8 @@ class multithread_adjacency_list {
 #endif
     return true;
   }
+
+  bool empty() const { return num_keys() == 0; }
 
   std::size_t num_keys() const {
     std::size_t count = 0;
@@ -189,9 +172,9 @@ class multithread_adjacency_list<
 
  public:
   using difference_type = typename local_iterator_type::difference_type;
-  using value_type = typename local_iterator_type::value_type;
-  using pointer = typename local_iterator_type::pointer;
-  using reference = typename local_iterator_type::reference;
+  using value_type      = typename local_iterator_type::value_type;
+  using pointer         = typename local_iterator_type::pointer;
+  using reference       = typename local_iterator_type::reference;
 
   explicit impl_const_key_iterator(
       const adjacency_list_type *const adjacency_list)
@@ -210,10 +193,10 @@ class multithread_adjacency_list<
   }
 
   impl_const_key_iterator(const impl_const_key_iterator &) = default;
-  impl_const_key_iterator(impl_const_key_iterator &&) = default;
+  impl_const_key_iterator(impl_const_key_iterator &&)      = default;
 
   impl_const_key_iterator &operator=(const impl_const_key_iterator &) = default;
-  impl_const_key_iterator &operator=(impl_const_key_iterator &&) = default;
+  impl_const_key_iterator &operator=(impl_const_key_iterator &&)      = default;
 
   void move_to_end() {
     m_current_bank_index = m_ptr_adjacency_list->m_bank_table.size();
@@ -281,8 +264,8 @@ class multithread_adjacency_list<
   }
 
   const adjacency_list_type *m_ptr_adjacency_list;
-  std::size_t m_current_bank_index;
-  local_iterator_type m_local_iterator;
+  std::size_t                m_current_bank_index;
+  local_iterator_type        m_local_iterator;
 };
 
 }  // namespace clams

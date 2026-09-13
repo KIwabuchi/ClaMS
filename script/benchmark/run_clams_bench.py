@@ -88,7 +88,7 @@ def parse_options():
                         help='min_sample value for calculating core distance. If -1 is given, core distance is not calculated.')
     # Use distributed HDBSCAN
     parser.add_argument('--distributed_hdbscan', action='store_true',
-                        help='Use distributed HDBSCAN (run_distributed_hdbscan_clustering) instead of serial version(run_hdbscan_clustering).')
+                        help='Use distributed HDBSCAN (run_distributed_hdbscan_clustering) instead of serial version (run_hdbscan_clustering).')
 
     # For evaluation
     parser.add_argument('-g', '--ground_truth_path',
@@ -215,8 +215,7 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
         hpc_clustering_command = (f"{clustering_exe} {verbose_flag} -i {amst_ds_path} -M "
                                   f" -m ${{MIN_CLUSTER_SIZE}} "
                                   f" -o {cluster_label_file} "
-                                  f" -c {cluster_tree_file} "
-                                  f" -n {num_tasks_per_node}")
+                                  f" -c {cluster_tree_file}")
         add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
     else:
         cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"

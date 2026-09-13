@@ -42,7 +42,6 @@ struct option {
   uint32_t              min_cluster_size{2};
   std::filesystem::path cluster_ids_out_path;
   std::filesystem::path cluster_data_out_path;
-  int                   num_files_to_output{0};
   bool                  metall_mst{false};
   bool                  verbose{false};
   bool                  read_mst_with_edge_ids{false};
@@ -54,18 +53,16 @@ void show_help() {
       << "<<Usage>>\n"
          "Required arguments:\n"
          "  -i <path> Path to a file or a directory that contains input MST. \n"
-         "  -o <path> Path to clustering output.\n"
+         "  -o <path> Path to clustering output directory. One text file with "
+         "lines of the form <point id><cluster id> will be written per rank. "
+         "The filenames will be of the form rank.txt.\n"
          "  -m <int>  Min cluster size parameter in HDBSCAN.\n"
          "Optional arguments:\n"
          "  -M If specified, input MST is Metall datastore.\n"
          "  -e If specified, read MST file with edge ids included. This option "
          "only works for text file MST input, not Metall input.\n"
-         "  -c <path> Path to detailed clustering data output.\n"
-         "  -n <int>  Number of files to output. (Default is number of ranks). "
-         "If the number of ranks is more than the number of files, then the "
-         "outputs will be consolidated to print n files. If the number of "
-         "ranks is less than or equal to n, then one file will be outputted "
-         "per rank.\n."
+         "  -c <path> Path to detailed clustering data output directory. One "
+         "csv file will be written per rank.\n"
          "  -v Verbose printout.\n"
          "  -h Show help.\n"
       << std::endl;
@@ -93,9 +90,6 @@ std::pair<bool, std::vector<int>> parse_option(int argc, char *argv[],
         break;
       case 'c':
         opt.cluster_data_out_path = std::filesystem::path(optarg);
-        break;
-      case 'n':
-        opt.num_files_to_output = std::stoi(optarg);
         break;
       case 'M':
         opt.metall_mst = true;
@@ -131,12 +125,6 @@ int main(int argc, char *argv[]) {
       }
     }
     show_help();
-  }
-
-  if (opt.num_files_to_output == 0) {
-    opt.num_files_to_output = world.size();
-  } else if (world.size() < opt.num_files_to_output) {
-    opt.num_files_to_output = world.size();
   }
 
   if (opt.cluster_ids_out_path.empty()) {
@@ -1180,55 +1168,24 @@ int main(int argc, char *argv[]) {
   {
     sw_step.reset();
 
-    // Sort out file names for output
-    std::string           output_dir;
-    std::string           file_prefix           = "";
-    std::filesystem::path no_extension_out_path = opt.cluster_ids_out_path;
-    no_extension_out_path.replace_extension();
-    if (no_extension_out_path.string() == opt.cluster_ids_out_path.string()) {
-      output_dir = opt.cluster_ids_out_path.string();
-    } else {
-      output_dir  = opt.cluster_ids_out_path.parent_path().string();
-      file_prefix = no_extension_out_path.filename().string();
-    }
-
     if (world.rank() == 0) {
-      if (opt.num_files_to_output == 1) {
-        spdlog::info("Writing cluster labels to: {}",
-                     opt.cluster_ids_out_path.string());
-      } else {
-        spdlog::info("Writing {} files containing cluster labels to: {}",
-                     opt.num_files_to_output, output_dir);
-      }
-    }
-
-    static std::string label_file_name;
-    int                file_number = 0;
-    if (opt.num_files_to_output == 1) {
-      label_file_name = opt.cluster_ids_out_path.filename().string();
-    } else {
-      // Get file number if outputting multiple files
-      if (opt.num_files_to_output < world.size()) {
-        file_number = world.rank() % opt.num_files_to_output;
-      } else {
-        file_number = world.rank();
-      }
-      label_file_name = file_prefix + std::to_string(file_number) + ".txt";
-    }
-
-    // Output points and cluster labels
-    ygm::io::multi_output mo_labels(world, output_dir);
-    if (world.rank() == file_number) {
-      mo_labels.async_write_line(label_file_name, "point_id\tcluster_id");
+      spdlog::info("Writing {} files containing cluster labels to: {}",
+                   world.size(), opt.cluster_ids_out_path.string());
+      std::filesystem::create_directories(opt.cluster_ids_out_path);
     }
     world.barrier();
-    auto write_labels_lambda = [&mo_labels](const id_t         &point_id,
-                                            const cluster_id_t &cluster_id) {
-      std::stringstream ss;
-      ss << point_id << "\t" << cluster_id;
-      mo_labels.async_write_line(label_file_name, ss.str());
-    };
-    point_to_cluster_id_map.for_all(write_labels_lambda);
+
+    // Output points and cluster labels
+    std::string label_file_name = std::to_string(world.rank()) + ".txt";
+    std::filesystem::path label_file_path =
+        opt.cluster_ids_out_path / label_file_name;
+    std::ofstream labels_ofs(label_file_path);
+    labels_ofs << "point_id\tcluster_id\n";
+
+    for (auto &[point_id, cluster_id] : point_to_cluster_id_map) {
+      labels_ofs << point_id << "\t" << cluster_id << "\n";
+    }
+    labels_ofs.close();
     world.barrier();
 
     if (world.rank() == 0) {
@@ -1240,47 +1197,22 @@ int main(int argc, char *argv[]) {
   if (!opt.cluster_data_out_path.empty()) {
     sw_step.reset();
 
-    // Sort out file names for output
-    std::string           output_dir;
-    std::string           file_prefix           = "";
-    std::filesystem::path no_extension_out_path = opt.cluster_data_out_path;
-    no_extension_out_path.replace_extension();
-    if (no_extension_out_path.string() == opt.cluster_data_out_path.string()) {
-      output_dir = opt.cluster_data_out_path.string();
-    } else {
-      output_dir  = opt.cluster_data_out_path.parent_path().string();
-      file_prefix = no_extension_out_path.filename().string();
-    }
-
     if (world.rank() == 0) {
-      if (opt.num_files_to_output == 1) {
-        spdlog::info("Writing full cluster data to: {}",
-                     opt.cluster_data_out_path.string());
-      } else {
-        spdlog::info("Writing {} files containing full cluster data to: {}",
-                     opt.num_files_to_output, output_dir);
-      }
+      spdlog::info("Writing {} files containing full cluster data to: {}",
+                   world.size(), opt.cluster_data_out_path.string());
+      std::filesystem::create_directories(opt.cluster_data_out_path);
     }
+    world.barrier();
 
-    std::string cluster_file_name;
-    int         file_number = 0;
-    if (opt.num_files_to_output == 1) {
-      cluster_file_name = opt.cluster_data_out_path.filename().string();
-    } else {
-      // Get file number if outputting multiple files
-      if (opt.num_files_to_output < world.size()) {
-        file_number = world.rank() % opt.num_files_to_output;
-      } else {
-        file_number = world.rank();
-      }
-      cluster_file_name = file_prefix + std::to_string(file_number) + ".csv";
-    }
+    std::string cluster_file_name = std::to_string(world.rank()) + ".csv";
+    std::filesystem::path cluster_file_path =
+        opt.cluster_data_out_path / cluster_file_name;
 
     if ((min_cluster_size == 2) | (opt.output_invalid_clusters_also)) {
       write_all_clusters_to_file_including_invalid_clusters(
-          world, output_dir, cluster_file_name, file_number,
-          root_chain_supernode, root_chain_min_edge_id, root_chain_second_child,
-          root_chain_cluster_map, chain_map, leaf_cluster_map);
+          cluster_file_path, root_chain_supernode, root_chain_min_edge_id,
+          root_chain_second_child, root_chain_cluster_map, chain_map,
+          leaf_cluster_map);
     } else {
       // YGM map to collect info on valid clusters to write to file
       ygm::container::map<cluster_name_t, full_valid_cluster_info>
@@ -1307,8 +1239,7 @@ int main(int argc, char *argv[]) {
       }
       sw_step.reset();
 
-      write_valid_clusters_to_file(world, output_dir, cluster_file_name,
-                                   file_number, valid_cluster_map);
+      write_valid_clusters_to_file(cluster_file_path, valid_cluster_map);
     }
 
     if (world.rank() == 0) {

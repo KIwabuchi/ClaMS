@@ -81,11 +81,6 @@ else ()
             COMPONENTS ${BOOST_COMPS})
 endif ()
 
-# Boost Components to link
-foreach (lib ${BOOST_INCLUDE_LIBRARIES})
-    list(APPEND BOOST_COMPONENTS "Boost::${lib}")
-endforeach ()
-
 # spdlog
 #
 FetchContent_Declare(
@@ -200,7 +195,7 @@ function(add_basic_executable target_name src_name)
     #  target_include_directories(${target_name}
     #                             PRIVATE ${PROJECT_SOURCE_DIR}/include)
     add_common_compile_options(${target_name})
-    target_link_libraries(${target_name} PRIVATE Threads::Threads ${BOOST_COMPONENTS})
+    target_link_libraries(${target_name} PRIVATE Threads::Threads ${BOOST_LIBS})
 endfunction()
 
 #

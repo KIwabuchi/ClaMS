@@ -1180,7 +1180,7 @@ int main(int argc, char *argv[]) {
     std::filesystem::path label_file_path =
         opt.cluster_ids_out_path / label_file_name;
     std::ofstream labels_ofs(label_file_path);
-    labels_ofs << "point_id\tcluster_id\n";
+    labels_ofs << "# point_id\tcluster_id\n";
 
     for (auto &[point_id, cluster_id] : point_to_cluster_id_map) {
       labels_ofs << point_id << "\t" << cluster_id << "\n";

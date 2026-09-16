@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include <boost/unordered/unordered_flat_set.hpp>
+
 #include "data_types.hpp"
 #include "multithread_adjacency_list.hpp"
 
@@ -21,6 +23,8 @@ using shm_graph_t =
 /// \brief Read knng files.
 /// \param knng_files A list of knng files.
 /// \param graph A graph to store the knng.
+/// \param has_distance If true, read the distances in the knng files; if false,
+/// ignore them.
 /// \details Each knng file is expected to have the following format:
 ///   - Each even numbered line (0-based) contains a source vertex ID followed
 ///   by its neighbor vertex IDs, separated by whitespace.
@@ -30,9 +34,9 @@ using shm_graph_t =
 ///   itself, and the corresponding distance in the odd numbered line is 0.0
 ///   (dummy distance).
 ///   - The number of neighbor IDs in each even numbered line must match the
-///   number of distances in the corresponding odd numbered
+///   number of distances in the corresponding odd numbered line.
 void read_knng(const std::vector<std::filesystem::path> &knng_files,
-               shm_graph_t                              &graph) {
+               shm_graph_t &graph, const bool has_distance = true) {
   OMP_DIRECTIVE(parallel for)
   for (std::size_t fno = 0; fno < knng_files.size(); ++fno) {
     const auto   &file = knng_files[fno];
@@ -55,16 +59,18 @@ void read_knng(const std::vector<std::filesystem::path> &knng_files,
       }
 
       std::vector<distance_t> dists;
-      {
+      if (has_distance) {
         std::getline(ifs, line);
         std::istringstream iss(line);
         distance_t         buf;
         while (iss >> buf) {
           dists.push_back(buf);
         }
+      } else {
+        dists.resize(ids.size());
       }
 
-      if (ids.size() != dists.size()) {
+      if (has_distance && ids.size() != dists.size()) {
         std::cerr << "Invalid file: " << file << std::endl;
         std::cerr << "#of IDs and distances do not match" << std::endl;
         std::exit(1);
@@ -75,6 +81,73 @@ void read_knng(const std::vector<std::filesystem::path> &knng_files,
       }
 
       const id_t src = ids[0];
+      for (std::size_t i = 1; i < ids.size(); ++i) {
+        graph.add(src, std::make_pair(ids[i], dists[i]));
+      }
+    }
+  }
+}
+
+/// \brief Read knng files, keeping only the rows whose source vertex ID is
+/// in `keep_ids`.
+/// \param knng_files A list of knng files.
+/// \param keep_ids The set of source vertex IDs to keep; rows for other
+/// source IDs are skipped.
+/// \param graph A graph to store the knng.
+/// \param has_distance If true, read the distances in the knng files; if
+/// false, ignore them.
+/// \details Uses the same file format as \ref read_knng.
+void read_knng_filtered(
+    const std::vector<std::filesystem::path>              &knng_files,
+    const boost::unordered::unordered_flat_set<id_t>       &keep_ids,
+    shm_graph_t &graph, const bool has_distance = true) {
+  OMP_DIRECTIVE(parallel for)
+  for (std::size_t fno = 0; fno < knng_files.size(); ++fno) {
+    const auto   &file = knng_files[fno];
+    std::ifstream ifs(file);
+    if (!ifs.is_open()) {
+      std::cerr << "Cannot open file: " << file << std::endl;
+      std::exit(1);
+    }
+
+    std::string line;
+    while (true) {
+      std::vector<id_t> ids;
+      {
+        std::getline(ifs, line);
+        std::istringstream iss(line);
+        id_t               buf;
+        while (iss >> buf) {
+          ids.push_back(buf);
+        }
+      }
+
+      std::vector<distance_t> dists;
+      if (has_distance) {
+        std::getline(ifs, line);
+        std::istringstream iss(line);
+        distance_t         buf;
+        while (iss >> buf) {
+          dists.push_back(buf);
+        }
+      } else {
+        dists.resize(ids.size());
+      }
+
+      if (has_distance && ids.size() != dists.size()) {
+        std::cerr << "Invalid file: " << file << std::endl;
+        std::cerr << "#of IDs and distances do not match" << std::endl;
+        std::exit(1);
+      }
+
+      if (ids.empty()) {
+        break;  // End of file
+      }
+
+      const id_t src = ids[0];
+      if (!keep_ids.contains(src)) {
+        continue;  // Source vertex not of interest; skip this row
+      }
       for (std::size_t i = 1; i < ids.size(); ++i) {
         graph.add(src, std::make_pair(ids[i], dists[i]));
       }

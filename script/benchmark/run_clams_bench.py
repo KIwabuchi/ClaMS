@@ -148,6 +148,9 @@ def parse_options():
     parser.add_argument('--noise_point_assigner_exe',
                         default=f'{cwd}/src/clustering/cluster_noise_points',
                         help='Path to the noise point assigner executable.')
+    parser.add_argument('--pm_datastore_copy_exe',
+                        default=f'{cwd}/src/pm_datastore/copy_pm_datastore',
+                        help='Path to the PM datastore copy executable.')
 
     # Etc
     parser.add_argument('-v', '--verbose', action='store_true',
@@ -268,6 +271,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                   dnnd_exe, nng_k, distance_func,
                                   points_file_format, point_path,
                                   nng_r, nng_delta,
+                                  pm_datastore_copy_exe,
                                   backup_knng,
                                   mfc_exe,
                                   amst_exe, amst_approx_bound_list,
@@ -306,8 +310,8 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             if backup_knng:
                 dnnd_ds_path_backup = f"{dnnd_ds_path}_backup"
                 job_script.write(f"echo \"Backing up KNNG datastore\"\n")
-                backup_knng_command = f"cp -r {dnnd_ds_path} {dnnd_ds_path_backup}"
-                add_cmd(backup_knng_command, job_script)
+                backup_knng_command = f"{pm_datastore_copy_exe} -s {dnnd_ds_path} -t {dnnd_ds_path_backup}"
+                add_srun_cmd(num_tasks_per_node, backup_knng_command, job_script)
         else:
             job_script.write(
                 f"Using existing DNND datastore at {input_dnnd_ds_path}\n")
@@ -420,6 +424,7 @@ def main():
                                                opts.point_path,
                                                opts.nng_r,
                                                opts.nng_delta,
+                                               opts.pm_datastore_copy_exe,
                                                opts.backup_knng,
                                                opts.mfc_exe,
                                                opts.amst_exe,

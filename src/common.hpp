@@ -174,30 +174,37 @@ inline void read_knng_edges(
 /// ignored. The output maps each point ID to its cluster ID; if an ID occurs
 /// more than once, the last assignment wins.
 template <typename cluster_id_table_t>
-void read_cluster_ids(const std::filesystem::path &input_path,
-                      cluster_id_table_t          &point_cluster_map) {
+void read_cluster_ids(const std::vector<std::filesystem::path> &input_paths,
+                      cluster_id_table_t &point_cluster_map) {
   using id_t         = typename cluster_id_table_t::key_type;
   using cluster_id_t = typename cluster_id_table_t::mapped_type;
 
-  std::ifstream ifs(input_path);
-  if (!ifs) {
-    std::cerr << "Failed to open " << input_path << std::endl;
-    std::abort();
-  }
-
-  std::string line;
-  while (std::getline(ifs, line)) {
-    if (line.empty() || line[0] == '#') {
-      continue;  // Skip empty lines and comments
-    }
-    std::istringstream iss(line);
-    id_t               point_id;
-    cluster_id_t       cluster_id;
-    if (!(iss >> point_id >> cluster_id)) {
-      std::cerr << "Error parsing line: " << line << std::endl;
+  for (const auto &input_path : input_paths) {
+    std::ifstream ifs(input_path);
+    if (!ifs) {
+      std::cerr << "Failed to open " << input_path << std::endl;
       std::abort();
     }
-    point_cluster_map[point_id] = cluster_id;
+
+    std::string line;
+    while (std::getline(ifs, line)) {
+      if (line.empty() || line[0] == '#') {
+        continue;  // Skip empty lines and comments
+      }
+      std::istringstream iss(line);
+      id_t               point_id;
+      cluster_id_t       cluster_id;
+      if (!(iss >> point_id >> cluster_id)) {
+        std::cerr << "Error parsing line: " << line << std::endl;
+        std::abort();
+      }
+      if (point_cluster_map.find(point_id) != point_cluster_map.end()) {
+        std::cerr << "Error: point ID " << point_id
+                  << " is assigned to multiple clusters." << std::endl;
+        std::abort();
+      }
+      point_cluster_map[point_id] = cluster_id;
+    }
   }
 }
 

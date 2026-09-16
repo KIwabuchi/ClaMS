@@ -12,11 +12,6 @@ setup_omp_target(cluster_noise_points)
 setup_metall_target(cluster_noise_points)
 setup_spdlog_target(cluster_noise_points)
 
-add_basic_executable(cluster_noise_points_v2 cluster_noise_points_v2.cpp)
-setup_omp_target(cluster_noise_points_v2)
-setup_metall_target(cluster_noise_points_v2)
-setup_spdlog_target(cluster_noise_points_v2)
-
 add_basic_executable(run_distributed_hdbscan_clustering run_distributed_hdbscan_clustering.cpp)
 setup_ygm_target(run_distributed_hdbscan_clustering)
 setup_omp_target(run_distributed_hdbscan_clustering)

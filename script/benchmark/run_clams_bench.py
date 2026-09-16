@@ -86,9 +86,6 @@ def parse_options():
     parser.add_argument('-s', '--min_samples', type=int, default=-1,
                         dest='min_samples',
                         help='min_sample value for calculating core distance. If -1 is given, core distance is not calculated.')
-    # Use distributed HDBSCAN
-    parser.add_argument('--distributed_hdbscan', action='store_true',
-                        help='Use distributed HDBSCAN (run_distributed_hdbscan_clustering) instead of serial version (run_hdbscan_clustering).')
 
     # For evaluation
     parser.add_argument('-g', '--ground_truth_path',
@@ -137,7 +134,7 @@ def parse_options():
                         default=f'{cwd}/src/mst/build_amst',
                         help='Path to the AMST executable.')
     parser.add_argument('-C', '--clustering_exe',
-                        default=f'{cwd}/src/clustering/run_hdbscan_clustering',
+                        default=f'{cwd}/src/clustering/run_distributed_hdbscan_clustering',
                         help='Path to the HPC clustering executable.')
     parser.add_argument('-E', '--python_evaluator',
                         default=f'{cwd}/script/benchmark/evaluate_clustering_quality.py',
@@ -165,20 +162,23 @@ def generate_job_name():
     return f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 stage_name_stack = []  # Stack to store stage names for logging
-def echo_stage_name(job_script, stage_name):
+# Show stage start message and stack the name in stage_name_stack
+# This function must be paired with a call to finish_stage() to properly log the end of the stage.
+def start_stage(job_script, stage_name):
     job_script.write("echo\n")
     job_script.write(f"echo ================================\n")
     job_script.write(f"echo \"{stage_name}\": $(date \"+%Y/%m/%d %H:%M:%S\")\n")
     job_script.write(f"echo ================================\n")
     stage_name_stack.append(stage_name)  # Add the stage name to the queue
 
+# Show stage finish message and pop the name from stage_name_stack
 def finish_stage(job_script):
     if stage_name_stack:
         stage_name = stage_name_stack.pop()  # Get the last stage name from the stack
         job_script.write(f"echo \"Finished {stage_name}: $(date \"+%Y/%m/%d %H:%M:%S\")\"\n")
         job_script.write("echo\n")
 
-def add_clustering_evaluation(job_script, cluster_label_file, amst_ds_path,
+def add_clustering_evaluation(job_script, cluster_label_dir, amst_ds_path,
                               ground_truth_path, evaluator,
                               ygm_cluster_eval,
                               num_tasks_per_node, verbose,
@@ -188,20 +188,20 @@ def add_clustering_evaluation(job_script, cluster_label_file, amst_ds_path,
         verbose_flag = " -v" if verbose else ""
         evaluation_command = (f"{evaluator} {verbose_flag} "
                               f"-g {ground_truth_path} "
-                              f"{cluster_label_file}")
+                              f"{cluster_label_dir}")
         add_srun_cmd(num_tasks_per_node, evaluation_command, job_script)
     else:
         job_script.write(
             "echo \"Evaluating Clustering using python script\"\n")
         evaluation_command = (f"python3 {evaluator} "
-                              f"-c {cluster_label_file} "
+                              f"-c {cluster_label_dir} "
                               f"-g {ground_truth_path}")
         if singleton_cluster_to_noise_points:
             evaluation_command += " -s"
         add_cmd(evaluation_command, job_script)
 
 def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
-                       amst_ds_path, clustering_exe, distributed_hdbscan,
+                       amst_ds_path, clustering_exe,
                        evaluator, ygm_cluster_eval, num_tasks_per_node,
                        verbose, ground_truth_path,
                        singleton_cluster_to_noise_points,
@@ -209,47 +209,37 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
     # Set the min cluster size environment variable for this run
     add_cmd(set_cmd, job_script, False, False)
 
-    echo_stage_name(job_script, "Running CLAMS-HDBSCAN")
+    start_stage(job_script, "Running CLAMS-HDBSCAN")
     job_script.write(f"echo \"Min cluster size ${{MIN_CLUSTER_SIZE}}\"\n")
-    if distributed_hdbscan:
-        cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
-        cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
-        verbose_flag = '-v' if verbose else ''
-        hpc_clustering_command = (f"{clustering_exe} {verbose_flag} -i {amst_ds_path} -M "
-                                  f" -m ${{MIN_CLUSTER_SIZE}} "
-                                  f" -o {cluster_label_file} "
-                                  f" -c {cluster_tree_file}")
-        add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
-    else:
-        cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
-        cluster_tree_file = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
-        hpc_clustering_command = (f"{clustering_exe} -i {amst_ds_path} -M "
-                                  f" -m ${{MIN_CLUSTER_SIZE}} "
-                                  f" -o {cluster_label_file} "
-                                  f" -c {cluster_tree_file} "
-                                  f" -P ")
-        add_cmd(hpc_clustering_command, job_script)
+    cluster_label_dir = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
+    cluster_tree_dir = f"{work_dir}/cluster_tree_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}/"
+    verbose_flag = '-v' if verbose else ''
+    hpc_clustering_command = (f"{clustering_exe} {verbose_flag} -i {amst_ds_path} -M "
+                                f" -m ${{MIN_CLUSTER_SIZE}} "
+                                f" -o {cluster_label_dir} "
+                                f" -c {cluster_tree_dir}")
+    add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
     finish_stage(job_script)
 
     if ground_truth_path:
-        echo_stage_name(job_script, "Evaluating Clustering Results")
+        start_stage(job_script, "Evaluating Clustering Results")
         job_script.write(f"echo \"MST-based cluster guess: False\"\n")
         add_clustering_evaluation(
-            job_script, cluster_label_file, amst_ds_path, ground_truth_path,
+            job_script, cluster_label_dir, amst_ds_path, ground_truth_path,
             evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
             singleton_cluster_to_noise_points)
         finish_stage(job_script)
 
-        echo_stage_name(job_script, "Assign clusters to noise points")
-        cluster_label_file_no_noise = f"{cluster_label_file[:-4]}.noise_assigned.txt"
+        start_stage(job_script, "Assign clusters to noise points")
+        cluster_label_file_no_noise = f"{cluster_label_dir[:-4]}-noise_assigned.txt"
         cluster_assign_command = (f"{noise_point_assigner_exe} -M "
                                   f"-m {amst_ds_path} "
-                                  f"-c {cluster_label_file} "
+                                  f"-c {cluster_label_dir} "
                                   f"-o {cluster_label_file_no_noise}")
         add_cmd(cluster_assign_command, job_script)
         finish_stage(job_script)
 
-        echo_stage_name(job_script, "Evaluate clustering results")
+        start_stage(job_script, "Evaluate clustering results")
         job_script.write(f"echo \"MST-based cluster guess: True\"\n")
         add_clustering_evaluation(
             job_script, cluster_label_file_no_noise, amst_ds_path,
@@ -275,7 +265,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                   backup_knng,
                                   mfc_exe,
                                   amst_exe, amst_approx_bound_list,
-                                  clustering_exe, distributed_hdbscan,
+                                  clustering_exe,
                                   evaluator,
                                   ygm_cluster_eval, verbose,
                                   ground_truth_path,
@@ -300,7 +290,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         # Run the DNND step
         job_script.write(f"echo \"kNNG k: {nng_k}\"\n")
         if len(input_dnnd_ds_path) == 0:
-            echo_stage_name(job_script, "Building KNNG")
+            start_stage(job_script, "Building KNNG")
             dnnd_ds_path = f"{work_dir}/dnnd_pm_datastore"
             dnnd_batch_size = 2 ** 25
             verbose_flag = '-v' if verbose else ''
@@ -318,7 +308,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             dnnd_ds_path = input_dnnd_ds_path
 
         # Connect the CCs
-        echo_stage_name(job_script, "Connecting the CCs using MFC")
+        start_stage(job_script, "Connecting the CCs using MFC")
         mfc_command = f"{mfc_exe} -d {dnnd_ds_path} -f {distance_func}"
         add_srun_cmd(num_tasks_per_node, mfc_command, job_script)
         finish_stage(job_script)
@@ -326,7 +316,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         # Convert to core distance
         # TODO: Implement
         if False and min_samples > 0:
-            echo_stage_name(job_script, "Convert to core distance kNNG")
+            start_stage(job_script, "Convert to core distance kNNG")
             knng_coredist_dir = f"{work_dir}/knng_coredist/"
             add_cmd(f'mkdir -p {knng_coredist_dir}', job_script)
             conv2coredist_cmd = f"./src/conv_knng_to_core_dist -i {dnnd_ds_path} -o {knng_coredist_dir}/knng.txt -m {min_samples}"
@@ -336,7 +326,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         try_no = 0
         for amst_approx_bound in amst_approx_bound_list:
             # Run the AMST step
-            echo_stage_name(job_script, f"Running AMST, approx bound = {amst_approx_bound}")
+            start_stage(job_script, f"Running AMST, approx bound = {amst_approx_bound}")
             amst_ds_path = f"{work_dir}/amst_pm_datastore_a{amst_approx_bound}"
             amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path} -e {amst_approx_bound}"
             add_srun_cmd(num_tasks_per_node, amst_command, job_script)
@@ -346,7 +336,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             for set_cmd in min_cluster_size_set_cmnds:
                 run_clustering(
                     job_script, set_cmd, work_dir, amst_approx_bound,
-                    amst_ds_path, clustering_exe, distributed_hdbscan,
+                    amst_ds_path, clustering_exe,
                     evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
                     ground_truth_path, singleton_cluster_to_noise_points,
                     noise_point_assigner_exe)
@@ -394,15 +384,6 @@ def main():
             # This is not the best way to set the number of threads for NEO-DNND, but it is a simple way to do it for now.
             dnnd_exe = f'{dnnd_exe} -T {opts.neodnnd_threads} -R {opts.neodnnd_replicate_rate}'
 
-    # Select HDBSCAN executable
-    # If --distributed_hdbscan is sepecified and the user did not override --clustering_exe,
-    # switch the default to run_distributed_hdbscan_clustering
-    clustering_exe = opts.clustering_exe
-    if opts.distributed_hdbscan:
-        default_clustering_exe = f'{os.getcwd()}/src/clustering/run_hdbscan_clustering'
-        if clustering_exe == default_clustering_exe:
-            clustering_exe = f'{os.getcwd()}/src/clustering/run_distributed_hdbscan_clustering'
-
     if opts.ygm_cluster_eval:
         evaluator = opts.ygm_evaluator_exe
     else:
@@ -429,8 +410,7 @@ def main():
                                                opts.mfc_exe,
                                                opts.amst_exe,
                                                amst_approx_bound_list,
-                                               clustering_exe,
-                                               opts.distributed_hdbscan,
+                                               opts.clustering_exe,
                                                evaluator,
                                                opts.ygm_cluster_eval,
                                                opts.verbose,

@@ -116,7 +116,8 @@ int main(int argc, char* argv[]) {
   }
 
   map_t<id_t, id_t> point_cluster_map;
-  read_cluster_ids(opt.cluster_ids_input_path, point_cluster_map);
+  read_cluster_ids(clams::find_files(opt.cluster_ids_input_path),
+                   point_cluster_map);
   spdlog::info("Read {} points' cluster IDs from {}", point_cluster_map.size(),
                opt.cluster_ids_input_path.string());
 

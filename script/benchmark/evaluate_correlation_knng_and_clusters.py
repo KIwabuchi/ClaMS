@@ -10,14 +10,17 @@ Usage:
 
 Arguments:
     -g/--graph: KNNG file or directory containing KNNG dump files.
+    -N/--no-distance: indicate that the KNNG files do not contain distance lines.
     -c/--cluster: cluster file or directory containing cluster-label files.
     -k/--neighbors: number of neighbors to consider for each point.
+    -h/--help: show this help message and exit.
 
 KNNG file format:
     Each record is encoded as two lines:
         <source_id> <neighbor_id_1> <neighbor_id_2> ...
         <dummy_distance> <distance_1> <distance_2> ...
     The leading distance is a dummy value corresponding to the source ID and will be ignored.
+    If the KNNG files do not contain distance lines, use the -N/--no-distance flag.
 
 Cluster file format:
     Each line contains a point and its cluster ID separated by whitespace.
@@ -263,6 +266,9 @@ def main() -> None:
     for k in args.neighbors:
         try:
             per_point, summary = evaluate_knng_clusters(args.graph, args.cluster, k, no_distance=args.no_distance)
+            print(f"\nResults for k={k}:")
+            print(summary["num_points"], "points evaluated,", summary["num_noise_points"], "noise points skipped.")
+            print(summary["num_same_cluster_neighbors"], "same-cluster neighbors out of", summary["num_considered_neighbors"], "considered neighbors,", "fraction =", summary["avg_same_cluster_fraction"])
         except Exception as exc:  # pragma: no cover - CLI error path
             raise SystemExit(f"Error: {exc}") from exc
 

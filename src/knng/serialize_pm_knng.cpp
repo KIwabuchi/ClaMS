@@ -1,7 +1,6 @@
 // Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
 // Project Developers. See the top-level COPYRIGHT file for details.
 
-
 #define CLAMS_USE_SALTATLAS
 #define METALL_DISABLE_CONCURRENCY
 
@@ -9,11 +8,11 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
-#include <iostream>
-#include <vector>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <metall/metall.hpp>
 
@@ -22,9 +21,9 @@
 using namespace clams;
 
 void parse_option(int argc, char *argv[], std::filesystem::path &pm_knng_path,
-                  std::filesystem::path &output_path) {
+                  std::filesystem::path &output_path, bool &no_distance_dump) {
   int opt_char;
-  while ((opt_char = getopt(argc, argv, "i:o:h")) != -1) {
+  while ((opt_char = getopt(argc, argv, "i:o:Nh")) != -1) {
     switch (opt_char) {
       case 'i':
         pm_knng_path = std::filesystem::path(optarg);
@@ -32,6 +31,10 @@ void parse_option(int argc, char *argv[], std::filesystem::path &pm_knng_path,
       case 'o':
         output_path = std::filesystem::path(optarg);
         break;
+      case 'N':
+        no_distance_dump = true;
+        break;
+
       case 'h':
         std::cout << "Usage: " << argv[0]
                   << " -i <pm_knng_path> -o <output_path>" << std::endl;
@@ -59,7 +62,8 @@ int main(int argc, char *argv[]) {
 
   std::filesystem::path pm_knng_path;
   std::filesystem::path output_path;
-  parse_option(argc, argv, pm_knng_path, output_path);
+  bool                  no_distance_dump = false;
+  parse_option(argc, argv, pm_knng_path, output_path, no_distance_dump);
 
   dist_pm_knng_t pm_knng(comm.get_mpi_comm());
   pm_knng.open_read_only(pm_knng_path);
@@ -83,11 +87,13 @@ int main(int argc, char *argv[]) {
     }
     ofs << "\n";
 
-    ofs << "0.0";
-    for (const auto &neighbor : neighbors) {
-      ofs << " " << neighbor.distance;
+    if (!no_distance_dump) {
+      ofs << "0.0";
+      for (const auto &neighbor : neighbors) {
+        ofs << " " << neighbor.distance;
+      }
+      ofs << "\n";
     }
-    ofs << "\n";
   }
 
   comm.cf_barrier();

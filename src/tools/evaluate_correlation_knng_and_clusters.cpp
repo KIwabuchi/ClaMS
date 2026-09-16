@@ -33,11 +33,12 @@ using cluster_id_table_t = boost::unordered::unordered_flat_map<id_t, id_t>;
 // correlation analysis.
 bool parse_option(int argc, char *argv[],
                   std::filesystem::path &input_knng_path,
-                  std::filesystem::path &input_clusters_path, size_t &max_k) {
+                  std::filesystem::path &input_clusters_path, size_t &max_k,
+                  bool &no_distance) {
   input_knng_path.clear();
 
   int opt;
-  while ((opt = ::getopt(argc, argv, "g:c:k:")) != -1) {
+  while ((opt = ::getopt(argc, argv, "g:c:k:N")) != -1) {
     switch (opt) {
       case 'g': {
         input_knng_path = std::filesystem::path(optarg);
@@ -49,6 +50,10 @@ bool parse_option(int argc, char *argv[],
       }
       case 'k': {
         max_k = std::stoul(optarg);
+        break;
+      }
+      case 'N': {
+        no_distance = true;
         break;
       }
       default: {
@@ -74,9 +79,11 @@ bool parse_option(int argc, char *argv[],
 int main(int argc, char *argv[]) {
   std::filesystem::path input_knng_path;
   std::filesystem::path input_clusters_path;
-  size_t                max_k = 100;  // default value
+  size_t                max_k       = 100;  // default value
+  bool                  no_distance = false;
 
-  if (!parse_option(argc, argv, input_knng_path, input_clusters_path, max_k)) {
+  if (!parse_option(argc, argv, input_knng_path, input_clusters_path, max_k,
+                    no_distance)) {
     return EXIT_FAILURE;
   }
 
@@ -85,12 +92,13 @@ int main(int argc, char *argv[]) {
   clams::shm_graph_t graph;
 
   std::cout << "Read knng" << std::endl;
-  clams::read_knng(knng_files, graph);
+  clams::read_knng(knng_files, graph, !no_distance);
   std::cout << "#of points: " << graph.num_keys() << std::endl;
   std::cout << "#of neighbors: " << graph.num_values() << std::endl;
 
   cluster_id_table_t cluster_id_table;
-  clams::read_cluster_ids(input_clusters_path, cluster_id_table);
+  clams::read_cluster_ids(clams::find_files(input_clusters_path),
+                          cluster_id_table);
   std::cout << "#of points with clusters: " << cluster_id_table.size()
             << std::endl;
   const auto &cluster_ids = cluster_id_table;

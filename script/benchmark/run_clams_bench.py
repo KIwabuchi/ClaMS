@@ -96,6 +96,8 @@ def parse_options():
                         help='Use YGM cluster evaluation calculation.')
     parser.add_argument('-z', '--dummy_cluster_id', action='store_true',
                         help='Assign a singleton cluster to each noise point in the clustering result.')
+    parser.add_argument('--cluster_noise_points', action='store_true',
+                        help='Enable clustering of noise points after the main clustering process.')
 
     # For output
     parser.add_argument('-o', '--output_root_dir',
@@ -142,11 +144,11 @@ def parse_options():
     parser.add_argument('-Y', '--ygm_evaluator_exe',
                         default=f'{cwd}/tpls/clams-cc/build/src/clustering_metrics',
                         help='Path to the YGM clustering evaluation executable.')
-    parser.add_argument('--noise_point_assigner_exe',
+    parser.add_argument('--noise_point_clustering_exe',
                         default=f'{cwd}/src/clustering/cluster_noise_points',
                         help='Path to the noise point assigner executable.')
     parser.add_argument('--pm_datastore_copy_exe',
-                        default=f'{cwd}/src/pm_datastore/copy_pm_datastore',
+                        default=f'{cwd}/src/tools/copy_pm_datastore',
                         help='Path to the PM datastore copy executable.')
 
     # Etc
@@ -205,7 +207,8 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
                        evaluator, ygm_cluster_eval, num_tasks_per_node,
                        verbose, ground_truth_path,
                        singleton_cluster_to_noise_points,
-                       noise_point_assigner_exe):
+                       noise_point_clustering_exe,
+                       cluster_noise_points):
     # Set the min cluster size environment variable for this run
     add_cmd(set_cmd, job_script, False, False)
 
@@ -221,6 +224,16 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
     add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
     finish_stage(job_script)
 
+    if cluster_noise_points:
+        start_stage(job_script, "Assign clusters to noise points")
+        no_noise_points_cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}_no_noise.txt"
+        cluster_assign_command = (f"{noise_point_clustering_exe} -M "
+                                    f"-m {amst_ds_path} "
+                                    f"-c {cluster_label_dir} "
+                                    f"-o {no_noise_points_cluster_label_file}")
+        add_cmd(cluster_assign_command, job_script)
+        finish_stage(job_script)
+
     if ground_truth_path:
         start_stage(job_script, "Evaluating Clustering Results")
         job_script.write(f"echo \"MST-based cluster guess: False\"\n")
@@ -230,22 +243,14 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
             singleton_cluster_to_noise_points)
         finish_stage(job_script)
 
-        start_stage(job_script, "Assign clusters to noise points")
-        cluster_label_file_no_noise = f"{cluster_label_dir[:-4]}-noise_assigned.txt"
-        cluster_assign_command = (f"{noise_point_assigner_exe} -M "
-                                  f"-m {amst_ds_path} "
-                                  f"-c {cluster_label_dir} "
-                                  f"-o {cluster_label_file_no_noise}")
-        add_cmd(cluster_assign_command, job_script)
-        finish_stage(job_script)
-
-        start_stage(job_script, "Evaluate clustering results")
-        job_script.write(f"echo \"MST-based cluster guess: True\"\n")
-        add_clustering_evaluation(
-            job_script, cluster_label_file_no_noise, amst_ds_path,
-            ground_truth_path, evaluator, ygm_cluster_eval,
-            num_tasks_per_node, verbose, singleton_cluster_to_noise_points)
-        finish_stage(job_script)
+        if cluster_noise_points:
+            start_stage(job_script, "Evaluate clustering results")
+            job_script.write(f"echo \"MST-based cluster guess: True\"\n")
+            add_clustering_evaluation(
+                job_script, no_noise_points_cluster_label_file, amst_ds_path,
+                ground_truth_path, evaluator, ygm_cluster_eval,
+                num_tasks_per_node, verbose, singleton_cluster_to_noise_points)
+            finish_stage(job_script)
 
     job_script.write("echo \"\" \n")
 
@@ -267,13 +272,15 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                                   amst_exe, amst_approx_bound_list,
                                   clustering_exe,
                                   evaluator,
-                                  ygm_cluster_eval, verbose,
+                                  ygm_cluster_eval,
                                   ground_truth_path,
                                   singleton_cluster_to_noise_points,
                                   min_cluster_size_set_cmnds,
                                   min_samples,
-                                  noise_point_assigner_exe,
-                                  input_dnnd_ds_path='',):
+                                  noise_point_clustering_exe,
+                                  cluster_noise_points,
+                                  input_dnnd_ds_path,
+                                  verbose):
     create_dir(job_dir)
     job_script_path = f'{job_dir}/job.sh'
 
@@ -339,7 +346,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                     amst_ds_path, clustering_exe,
                     evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
                     ground_truth_path, singleton_cluster_to_noise_points,
-                    noise_point_assigner_exe)
+                    noise_point_clustering_exe, cluster_noise_points)
             try_no += 1
 
         finish_stage(job_script)
@@ -413,13 +420,14 @@ def main():
                                                opts.clustering_exe,
                                                evaluator,
                                                opts.ygm_cluster_eval,
-                                               opts.verbose,
                                                opts.ground_truth_path,
                                                opts.dummy_cluster_id,
                                                min_cluster_size_set_cmnds,
                                                opts.min_samples,
-                                               opts.noise_point_assigner_exe,
-                                               opts.input_dnnd_ds_path)
+                                               opts.noise_point_clustering_exe,
+                                               opts.cluster_noise_points,
+                                               opts.input_dnnd_ds_path,
+                                               opts.verbose)
     print(f"Generated batch script: {job_script}")
 
     job_submission_cmd = f"sbatch {opts.sbatch_opts} {job_script}"

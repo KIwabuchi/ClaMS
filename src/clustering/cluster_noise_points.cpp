@@ -22,6 +22,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/stopwatch.h>
 #include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/unordered/unordered_flat_set.hpp>
 
 #include "../common.hpp"
 
@@ -29,6 +30,9 @@ using namespace clams;
 
 template <typename K, typename V>
 using map_t = boost::unordered::unordered_flat_map<K, V>;
+
+template <typename K>
+using set_t = boost::unordered::unordered_flat_set<K>;
 
 struct option {
   std::filesystem::path mst_edges_path;
@@ -80,7 +84,7 @@ int main(int argc, char* argv[]) {
   option opt;
   parse_option(argc, argv, opt);
 
-  map_t<id_t, std::vector<id_t>> mst_graph;
+  map_t<id_t, std::vector<std::pair<id_t, distance_t>>> mst_graph;
   if (opt.metall_mst) {
     spdlog::info("Attaching MST in Metall datastore");
     metall::manager metall_manager(metall::open_read_only, opt.mst_edges_path);
@@ -95,8 +99,8 @@ int main(int argc, char* argv[]) {
     spdlog::info("#of MST edges: {}", input_mst_edges->size());
     spdlog::info("Copying MST edges from Metall datastore");
     for (const auto& edge : *input_mst_edges) {
-      mst_graph[edge.ids[0]].push_back(edge.ids[1]);
-      mst_graph[edge.ids[1]].push_back(edge.ids[0]);
+      mst_graph[edge.ids[0]].push_back({edge.ids[1], edge.distance});
+      mst_graph[edge.ids[1]].push_back({edge.ids[0], edge.distance});
     }
   } else {
     spdlog::info("Reading MST edges");
@@ -104,8 +108,8 @@ int main(int argc, char* argv[]) {
     read_edges(opt.mst_edges_path, input_mst_edges);
     spdlog::info("#of MST edges: {}", input_mst_edges.size());
     for (const auto& edge : input_mst_edges) {
-      mst_graph[edge.ids[0]].push_back(edge.ids[1]);
-      mst_graph[edge.ids[1]].push_back(edge.ids[0]);
+      mst_graph[edge.ids[0]].push_back({edge.ids[1], edge.distance});
+      mst_graph[edge.ids[1]].push_back({edge.ids[0], edge.distance});
     }
   }
 
@@ -135,9 +139,9 @@ int main(int argc, char* argv[]) {
 
   std::size_t n_noise_points    = 0;
   std::size_t n_assigned_points = 0;
-  // NOTE: this algorithm is not determinstic because threads update the shared
-  // point_cluster_map concurrently.
-  // We employ this algorithm because it is simple and fast.
+  // NOTE: point_cluster_map may be updated concurrently by multiple threads,
+  // which causes data races, but it is acceptable for this use case. We employ
+  // this algorithm because it is simple and fast.
   OMP_DIRECTIVE(parallel for reduction(+ : n_noise_points, n_assigned_points))
   for (size_t i = 0; i < point_ids.size(); ++i) {
     const auto point_id = point_ids.at(i);
@@ -146,32 +150,44 @@ int main(int argc, char* argv[]) {
     }
     ++n_noise_points;
 
-    std::deque<id_t>  bfs_queue;
-    map_t<id_t, bool> visited;
-    bfs_queue.push_back(point_id);
-    visited[point_id]  = true;
+    std::vector<std::pair<id_t, distance_t>> bfs_front;
+
+    set_t<id_t> visited;
+    bfs_front.push_back({point_id, 0});
+    visited.insert(point_id);
     bool found_cluster = false;
 
-    while (!bfs_queue.empty() && !found_cluster) {
-      const auto current_point_id = bfs_queue.front();
-      bfs_queue.pop_front();
-
-      for (const auto neighbor_id : mst_graph.at(current_point_id)) {
-        if (visited.find(neighbor_id) != visited.end()) {
-          continue;  // Already visited, e.g., the node we came from
-        }
-        if (point_cluster_map.at(neighbor_id) != k_noise_cluster_id) {
-          // Found a neighbor that belongs to a cluster
-          point_cluster_map[point_id] = point_cluster_map.at(neighbor_id);
-          found_cluster               = true;
-          ++n_assigned_points;
-          break;
-        } else {
-          visited[neighbor_id] = true;
-          bfs_queue.push_back(neighbor_id);
+    // Level-order traversal (BFS) to find the nearest cluster for the noise
+    // point. Within each level, visit closer neighbors first
+    while (!bfs_front.empty()) {
+      std::vector<std::pair<id_t, distance_t>> next;
+      for (const auto& [pid, _] : bfs_front) {
+        // Traverse the neighbors of the current point in the MST
+        for (const auto& [nid, ndist] : mst_graph.at(pid)) {
+          if (visited.count(nid) > 0) {
+            continue;  // Already visited, e.g., the node we came from
+          }
+          if (point_cluster_map.at(nid) != k_noise_cluster_id) {
+            // Found a neighbor that belongs to a cluster
+            // Update the table without locking, which may cause data races but
+            // is acceptable for this use case
+            point_cluster_map.at(point_id) = point_cluster_map.at(nid);
+            found_cluster                  = true;
+            ++n_assigned_points;
+            goto BFS_COMPLETE;
+          } else {
+            visited.insert(nid);
+            next.push_back({nid, ndist});
+          }
         }
       }
+      bfs_front.swap(next);
+      // Sort the BFS front by distance to prioritize closer neighbors
+      std::sort(
+          bfs_front.begin(), bfs_front.end(),
+          [](const auto& a, const auto& b) { return a.second < b.second; });
     }
+  BFS_COMPLETE:
 
     if (!found_cluster) {
       spdlog::warn("Point {} could not be assigned to any cluster.", point_id);

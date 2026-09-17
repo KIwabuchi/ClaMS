@@ -25,6 +25,7 @@
 #include <boost/unordered/unordered_flat_set.hpp>
 
 #include "../common.hpp"
+#include "../details/multithread_adjacency_list.hpp"
 
 using namespace clams;
 
@@ -84,7 +85,7 @@ int main(int argc, char* argv[]) {
   option opt;
   parse_option(argc, argv, opt);
 
-  map_t<id_t, std::vector<std::pair<id_t, distance_t>>> mst_graph;
+  multithread_adjacency_list<id_t, std::pair<id_t, distance_t>> mst_graph;
   if (opt.metall_mst) {
     spdlog::info("Attaching MST in Metall datastore");
     metall::manager metall_manager(metall::open_read_only, opt.mst_edges_path);
@@ -98,18 +99,22 @@ int main(int argc, char* argv[]) {
     }
     spdlog::info("#of MST edges: {}", input_mst_edges->size());
     spdlog::info("Copying MST edges from Metall datastore");
-    for (const auto& edge : *input_mst_edges) {
-      mst_graph[edge.ids[0]].push_back({edge.ids[1], edge.distance});
-      mst_graph[edge.ids[1]].push_back({edge.ids[0], edge.distance});
+    OMP_DIRECTIVE(parallel for)
+    for (size_t i = 0; i < input_mst_edges->size(); ++i) {
+      const auto& edge = input_mst_edges->at(i);
+      mst_graph.add(edge.ids[0], {edge.ids[1], edge.distance});
+      mst_graph.add(edge.ids[1], {edge.ids[0], edge.distance});
     }
   } else {
     spdlog::info("Reading MST edges");
     weighted_edge_list_t input_mst_edges;
     read_edges(opt.mst_edges_path, input_mst_edges);
     spdlog::info("#of MST edges: {}", input_mst_edges.size());
-    for (const auto& edge : input_mst_edges) {
-      mst_graph[edge.ids[0]].push_back({edge.ids[1], edge.distance});
-      mst_graph[edge.ids[1]].push_back({edge.ids[0], edge.distance});
+    OMP_DIRECTIVE(parallel for)
+    for (size_t i = 0; i < input_mst_edges.size(); ++i) {
+      const auto& edge = input_mst_edges.at(i);
+      mst_graph.add(edge.ids[0], {edge.ids[1], edge.distance});
+      mst_graph.add(edge.ids[1], {edge.ids[0], edge.distance});
     }
   }
 
@@ -163,7 +168,9 @@ int main(int argc, char* argv[]) {
       std::vector<std::pair<id_t, distance_t>> next;
       for (const auto& [pid, _] : bfs_front) {
         // Traverse the neighbors of the current point in the MST
-        for (const auto& [nid, ndist] : mst_graph.at(pid)) {
+        for (auto nitr = mst_graph.values_begin(pid);
+             nitr != mst_graph.values_end(pid); ++nitr) {
+          const auto& [nid, ndist] = *nitr;
           if (visited.count(nid) > 0) {
             continue;  // Already visited, e.g., the node we came from
           }

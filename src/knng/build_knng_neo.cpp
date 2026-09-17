@@ -69,16 +69,20 @@ int main(int argc, char **argv) {
       return 1;
     }
 
-    ygm::utility::timer neo_dnnd_const_timer;
     // Build kNNG using neo_dnnd
     neo_dnnd_t neo_dnnd(
         saltatlas::distance::distance_function<typename neo_dnnd_t::point_type,
                                                dist_t>(opt.distance_name),
         comm, opt.verbose);
+
+    ygm::utility::timer read_points_timer;
     comm.cout0() << "\n<<Read Points>>" << std::endl;
     neo_dnnd.load_points(point_files.begin(), point_files.end(),
                          opt.point_file_format);
+    comm.cout0() << "\nReading points took (s)\t" << read_points_timer.elapsed()
+                 << std::endl;
 
+    ygm::utility::timer neo_dnnd_const_timer;
     comm.cout0() << "\n<<kNNG Construction>>" << std::endl;
     auto knng = neo_dnnd.build(opt.index_k, opt.r, opt.delta,
                                opt.replicate_rate, opt.batch_size);

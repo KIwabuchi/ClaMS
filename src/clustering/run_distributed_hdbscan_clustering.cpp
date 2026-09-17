@@ -118,7 +118,7 @@ int main(int argc, char *argv[]) {
 
   option opt;
   auto   parse_return = parse_option(argc, argv, opt);
-  if ((parse_return.first) & world.rank() == 0) {
+  if ((parse_return.first) & (world.rank() == 0)) {
     if (parse_return.second.size() > 0) {
       for (int opt_char : parse_return.second) {
         spdlog::critical("Ignoring unknown option: {:c}\n", opt_char);
@@ -487,8 +487,11 @@ int main(int argc, char *argv[]) {
         spdlog::info("    Time for this contraction round (s): {:.3f}",
                      sw_round);
       }
-    }
-  }
+    }  // End round
+
+    min_incident_edge_map.clear();
+    tree_components_djset.clear();
+  }  // End phase 1
   if (world.rank() == 0) {
     spdlog::info(" Time for this phase (s): {:.3f}", sw_phase);
     if (opt.verbose) {
@@ -560,7 +563,7 @@ int main(int argc, char *argv[]) {
 
     // Assign edges to chains
     {
-      if (world.rank() == 0 && opt.verbose) {
+      if ((world.rank() == 0) && opt.verbose) {
         spdlog::info(" Assigning edges to chains");
       }
 
@@ -662,6 +665,7 @@ int main(int argc, char *argv[]) {
           },
           edge);
     }
+    world.barrier();
 
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
         full_root_chain_cluster_array(world, local_root_chain_clusters);
@@ -679,6 +683,7 @@ int main(int argc, char *argv[]) {
       std::vector<edge_id_with_dist_t> root_chain_non_alpha_edges;
       root_chain_non_alpha_edges = split_root_chain_non_alpha_edges_to_process(
           world, full_root_chain_cluster_array, root_chain_non_alpha_edge_set);
+      root_chain_non_alpha_edge_set.clear();
 
       // Assign root-chain non-alpha edges to their clusters
       assign_root_chain_non_alpha_edges_to_clusters(
@@ -709,6 +714,7 @@ int main(int argc, char *argv[]) {
             });
       }
       world.barrier();
+
       MPI_Allreduce(&local_root_chain_min_edge_id, &root_chain_min_edge_id, 1,
                     mpi_id_type(), MPI_MAX, world.get_mpi_comm());
 
@@ -770,6 +776,8 @@ int main(int argc, char *argv[]) {
       }
     }
 
+    full_root_chain_cluster_array.clear();
+
   }  // End Phase 2
 
   if (world.rank() == 0) {
@@ -830,19 +838,19 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    // Make sure that the bottom two root chain children are valid with
-    // at least min cluster size. We need this assumption to process merging
-    // invalid root chain clusters and then propagating size/stability
-    // This function also gets the root chain second child info and sets the
-    // top cluster of the second root chain child as valid
-    make_sure_root_chain_bottom_is_valid_and_get_second_child(
-        root_chain_cluster_map, root_chain_cluster_edges_map, chain_map,
-        leaf_cluster_map, root_chain_min_edge_id, root_chain_second_child,
-        min_cluster_size, root_chain_supernode);
-
     // Merge invalid root chain clusters
     {
       sw_step.reset();
+
+      // Make sure that the bottom two root chain children are valid with
+      // at least min cluster size. We need this assumption to process merging
+      // invalid root chain clusters and then propagating size/stability
+      // This function also gets the root chain second child info and sets the
+      // top cluster of the second root chain child as valid
+      make_sure_root_chain_bottom_is_valid_and_get_second_child(
+          root_chain_cluster_map, root_chain_cluster_edges_map, chain_map,
+          leaf_cluster_map, root_chain_min_edge_id, root_chain_second_child,
+          min_cluster_size, root_chain_supernode);
 
       id_t num_total_root_chain_clusters = root_chain_cluster_map.size();
       if (num_total_root_chain_clusters > 0) {
@@ -874,6 +882,7 @@ int main(int argc, char *argv[]) {
             full_root_chain_array, root_chain_cluster_map,
             root_chain_cluster_edges_map, chain_map, leaf_cluster_map,
             min_cluster_size);
+        full_root_chain_array.clear();
 
         if (world.rank() == 0 && opt.verbose) {
           spdlog::info(
@@ -884,6 +893,7 @@ int main(int argc, char *argv[]) {
                        sw_step);
         }
       }
+      calculate_root_chain_size_stability_time += sw_step.elapsed().count();
     }
 
     // Track whether we have selected a root chain cluster in our flat
@@ -970,6 +980,7 @@ int main(int argc, char *argv[]) {
             "stabilities (s): {:.3f}",
             sw_step);
       }
+      calculate_root_chain_size_stability_time += sw_step.elapsed().count();
       sw_step.reset();
 
       // Create another ygm array of just possible to select clusters
@@ -1044,6 +1055,7 @@ int main(int argc, char *argv[]) {
               "(s): {:.3f}",
               sw_step);
         }
+        calculate_root_chain_size_stability_time += sw_step.elapsed().count();
       }
     }
 
@@ -1051,8 +1063,6 @@ int main(int argc, char *argv[]) {
     // at this point
     root_chain_array.clear();
     world.barrier();
-
-    calculate_root_chain_size_stability_time += sw_round.elapsed().count();
 
     if (world.rank() == 0) {
       // if (selected_root_chain_cluster_edge_id > 0) {
@@ -1074,15 +1084,9 @@ int main(int argc, char *argv[]) {
     {
       sw_step.reset();
 
-      // Traverse down the child chains for cluster selection from all root
-      // chain clusters above the selected one (if there is one)
-      local_selected_clusters = traverse_down_hierarchy_and_select_clusters(
-          root_chain_cluster_map, chain_map, leaf_cluster_map,
-          root_chain_second_child, min_cluster_size, root_chain_supernode,
-          selected_root_chain_cluster_edge_id);
-
       // If we selected a root chain cluster as a flat cluster, set it as
-      // selected and add it to local selected clusters on rank 0
+      // selected and add it to local selected clusters on rank 0. This is the
+      // first cluster selected, so it will have cluster id 0.
       if (world.rank() == 0 && selected_root_chain_cluster_edge_id > 0) {
         cluster_name_t cluster_name = std::make_pair(
             root_chain_supernode, selected_root_chain_cluster_edge_id);
@@ -1095,6 +1099,14 @@ int main(int argc, char *argv[]) {
             });
       }
       world.barrier();
+
+      // Traverse down the child chains for cluster selection from all root
+      // chain clusters above the selected one (if there is one)
+      local_selected_clusters = traverse_down_hierarchy_and_select_clusters(
+          root_chain_cluster_map, chain_map, leaf_cluster_map,
+          root_chain_second_child, min_cluster_size, root_chain_supernode,
+          selected_root_chain_cluster_edge_id);
+
       select_clusters_time += sw_step.elapsed().count();
 
       id_t num_clusters       = local_selected_clusters.size();
@@ -1157,20 +1169,19 @@ int main(int argc, char *argv[]) {
       spdlog::info("   Time to assign cluster labels to points (s): {:.3f} ",
                    label_points_time);
     }
-  }
-
-  if (world.rank() == 0) {
     spdlog::info("Total time other than writing output files (s): {:.3f}",
                  sw_clustering);
   }
+  world.barrier();
 
   // Write point labels to file
   {
     sw_step.reset();
 
+    int num_files = world.size();
     if (world.rank() == 0) {
       spdlog::info("Writing {} files containing cluster labels to: {}",
-                   world.size(), opt.cluster_ids_out_path.string());
+                   num_files, opt.cluster_ids_out_path.string());
       std::filesystem::create_directories(opt.cluster_ids_out_path);
     }
     world.barrier();
@@ -1179,31 +1190,36 @@ int main(int argc, char *argv[]) {
     std::string label_file_name = std::to_string(world.rank()) + ".txt";
     std::filesystem::path label_file_path =
         opt.cluster_ids_out_path / label_file_name;
-    std::ofstream labels_ofs(label_file_path);
-    labels_ofs << "# point_id\tcluster_id\n";
-
-    for (auto &[point_id, cluster_id] : point_to_cluster_id_map) {
-      labels_ofs << point_id << "\t" << cluster_id << "\n";
+    std::ofstream label_ofs(label_file_path);
+    if (!label_ofs.is_open()) {
+      spdlog::warn("Unable to open label file: {}", label_file_path.string());
     }
-    labels_ofs.close();
+
+    label_ofs << "# point_id\tcluster_id\n";
+    for (const auto &[point_id, cluster_id] : point_to_cluster_id_map) {
+      label_ofs << point_id << "\t" << cluster_id << "\n";
+    }
+    label_ofs.flush();
+    label_ofs.close();
     world.barrier();
 
     if (world.rank() == 0) {
-      spdlog::info("  Time to point labels (s): {:.3f}", sw_step);
+      spdlog::info("  Time to write point labels (s): {:.3f}", sw_step);
     }
   }
 
-  // Write cluster info to file
   if (!opt.cluster_data_out_path.empty()) {
     sw_step.reset();
 
+    int num_files = world.size();
     if (world.rank() == 0) {
       spdlog::info("Writing {} files containing full cluster data to: {}",
-                   world.size(), opt.cluster_data_out_path.string());
+                   num_files, opt.cluster_data_out_path.string());
       std::filesystem::create_directories(opt.cluster_data_out_path);
     }
     world.barrier();
 
+    // Output cluster information
     std::string cluster_file_name = std::to_string(world.rank()) + ".csv";
     std::filesystem::path cluster_file_path =
         opt.cluster_data_out_path / cluster_file_name;
@@ -1222,14 +1238,18 @@ int main(int argc, char *argv[]) {
                                        root_chain_cluster_map, chain_map,
                                        leaf_cluster_map, root_chain_supernode);
 
+      id_t num_valid_clusters = valid_cluster_map.size();
       if (world.rank() == 0 && opt.verbose) {
         spdlog::info("  Time to filter and keep valid clusters only(s): {:.3f}",
                      sw_step);
+        spdlog::info("  Number of valid cluster extracted {}",
+                     num_valid_clusters);
       }
       sw_step.reset();
 
       get_valid_cluster_parent_child_relations(
           valid_cluster_map, chain_map, leaf_cluster_map, root_chain_supernode);
+      world.barrier();
 
       if (world.rank() == 0 && opt.verbose) {
         spdlog::info(
@@ -1240,6 +1260,7 @@ int main(int argc, char *argv[]) {
       sw_step.reset();
 
       write_valid_clusters_to_file(cluster_file_path, valid_cluster_map);
+      world.barrier();
     }
 
     if (world.rank() == 0) {

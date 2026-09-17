@@ -1874,6 +1874,11 @@ void assign_points_cluster_ids(
     }
   };
 
+  // Track whether we have selected a root chain cluster in our flat
+  // clustering and if so, which one and its cluster id (it should be 0)
+  id_t selected_root_chain_cluster_edge_id = 0;
+  id_t selected_root_chain_cluster_id      = 0;
+
   for (uint32_t i = 0; i < local_selected_clusters.size(); ++i) {
     const cluster_name_t cluster_name = local_selected_clusters.at(i);
     const cluster_id_t   cluster_id   = start_cluster_id + i;
@@ -1884,63 +1889,14 @@ void assign_points_cluster_ids(
           cluster_name.first, label_leaf_cluster_edge_endpoints_lambda,
           cluster_id, edge_endpoints_map_ptr, point_to_cluster_id_map_ptr);
     }
-    // If the selected cluster is in the root chain, handle processing it
-    // separately
+    // If the selected cluster is in the root chain (there will be at most 1),
+    // then store its edge id and cluster id for processing separately
     else if (cluster_name.first == root_chain_supernode) {
-      id_t starting_cluster_edge_id = cluster_name.second;
-      auto label_root_chain_cluster_lambda =
-          [starting_cluster_edge_id, cluster_id, chain_map_ptr,
-           leaf_cluster_map_ptr, root_chain_cluster_edges_map_ptr,
-           edge_endpoints_map_ptr,
-           point_to_cluster_id_map_ptr](const id_t &cluster_edge_id,
-                                        root_chain_cluster_info &cluster_info) {
-            // If this root chain cluster is the selected cluster or below it,
-            // then label it
-            if (cluster_edge_id <= starting_cluster_edge_id) {
-              // Set this cluster's label
-              cluster_info.cluster_id = cluster_id;
-
-              // Label this cluster's edges added
-              root_chain_cluster_edges_map_ptr->async_visit(
-                  cluster_edge_id,
-                  label_root_chain_cluster_edge_endpoints_lambda, cluster_id,
-                  edge_endpoints_map_ptr, point_to_cluster_id_map_ptr);
-
-              // Visit this cluster's non-root-chain child and label it
-              // If its a leaf cluster, just label it directly
-              if (cluster_info.child.second == 1) {
-                leaf_cluster_map_ptr->async_visit(
-                    cluster_info.child,
-                    label_leaf_cluster_edge_endpoints_lambda, cluster_id,
-                    edge_endpoints_map_ptr, point_to_cluster_id_map_ptr);
-              }
-              // If its a chain, go visit it with the label points functor
-              else {
-                chain_map_ptr->async_visit(
-                    cluster_info.child, label_points_functor(),
-                    std::numeric_limits<id_t>::max(), cluster_id,
-                    leaf_cluster_map_ptr, edge_endpoints_map_ptr,
-                    point_to_cluster_id_map_ptr);
-              }
-            }
-          };
-
-      root_chain_cluster_map.for_all(label_root_chain_cluster_lambda);
-
-      // Also handle labeling the second root chain child
-      if (root_chain_second_child_name.second == 1) {
-        leaf_cluster_map.async_visit(root_chain_second_child_name,
-                                     label_leaf_cluster_edge_endpoints_lambda,
-                                     cluster_id, edge_endpoints_map_ptr,
-                                     point_to_cluster_id_map_ptr);
-      } else {
-        chain_map.async_visit(
-            root_chain_second_child_name, label_points_functor(),
-            std::numeric_limits<id_t>::max(), cluster_id, leaf_cluster_map_ptr,
-            edge_endpoints_map_ptr, point_to_cluster_id_map_ptr);
-      }
+      selected_root_chain_cluster_edge_id = cluster_name.second;
+      selected_root_chain_cluster_id      = cluster_id;
     }
-    // If the selected cluster is in a chain, use the label points functor
+    // If the selected cluster is in a non-root chain, use the label points
+    // functor
     else {
       chain_map.async_visit(cluster_name.first, label_points_functor(),
                             cluster_name.second, cluster_id,
@@ -1948,8 +1904,70 @@ void assign_points_cluster_ids(
                             point_to_cluster_id_map_ptr);
     }
   }
-
   comm.barrier();
+
+  // Check if we selected a root chain cluster and if so, process it
+  MPI_Allreduce(MPI_IN_PLACE, &selected_root_chain_cluster_edge_id, 1,
+                mpi_id_type(), MPI_MAX, comm.get_mpi_comm());
+  MPI_Allreduce(MPI_IN_PLACE, &selected_root_chain_cluster_id, 1, mpi_id_type(),
+                MPI_MAX, comm.get_mpi_comm());
+
+  if (selected_root_chain_cluster_edge_id > 0) {
+    auto label_root_chain_cluster_lambda =
+        [selected_root_chain_cluster_edge_id, selected_root_chain_cluster_id,
+         chain_map_ptr, leaf_cluster_map_ptr, root_chain_cluster_edges_map_ptr,
+         edge_endpoints_map_ptr,
+         point_to_cluster_id_map_ptr](const id_t              &cluster_edge_id,
+                                      root_chain_cluster_info &cluster_info) {
+          // If this root chain cluster is the selected cluster or below it,
+          // then label it
+          if (cluster_edge_id <= selected_root_chain_cluster_edge_id) {
+            // Set this cluster's label
+            cluster_info.cluster_id = selected_root_chain_cluster_id;
+
+            // Label this cluster's edges added
+            root_chain_cluster_edges_map_ptr->async_visit(
+                cluster_edge_id, label_root_chain_cluster_edge_endpoints_lambda,
+                selected_root_chain_cluster_id, edge_endpoints_map_ptr,
+                point_to_cluster_id_map_ptr);
+
+            // Visit this cluster's non-root-chain child and label it
+            // If its a leaf cluster, just label it directly
+            if (cluster_info.child.second == 1) {
+              leaf_cluster_map_ptr->async_visit(
+                  cluster_info.child, label_leaf_cluster_edge_endpoints_lambda,
+                  selected_root_chain_cluster_id, edge_endpoints_map_ptr,
+                  point_to_cluster_id_map_ptr);
+            }
+            // If its a chain, go visit it with the label points functor
+            else {
+              chain_map_ptr->async_visit(
+                  cluster_info.child, label_points_functor(),
+                  std::numeric_limits<id_t>::max(),
+                  selected_root_chain_cluster_id, leaf_cluster_map_ptr,
+                  edge_endpoints_map_ptr, point_to_cluster_id_map_ptr);
+            }
+          }
+        };
+    root_chain_cluster_map.for_all(label_root_chain_cluster_lambda);
+
+    // Also handle labeling the second root chain child
+    if (root_chain_second_child_name.second == 1) {
+      leaf_cluster_map.async_visit(root_chain_second_child_name,
+                                   label_leaf_cluster_edge_endpoints_lambda,
+                                   selected_root_chain_cluster_id,
+                                   edge_endpoints_map_ptr,
+                                   point_to_cluster_id_map_ptr);
+    } else {
+      chain_map.async_visit(
+          root_chain_second_child_name, label_points_functor(),
+          std::numeric_limits<id_t>::max(), selected_root_chain_cluster_id,
+          leaf_cluster_map_ptr, edge_endpoints_map_ptr,
+          point_to_cluster_id_map_ptr);
+    }
+  }
+  comm.barrier();
+
   return;
 }
 
@@ -1959,8 +1977,8 @@ void assign_points_cluster_ids(
  *
  * @param cluster_file_path File to write cluster data to. Each rank must
  * receive its own file name (e.g., path_to_cluster_data/rank.csv).
- * @param root_chain_min_edge_id The smallest cluster edge id in the root chain.
- * We write the second root chain child info to that cluster.
+ * @param root_chain_min_edge_id The smallest cluster edge id in the root
+ * chain. We write the second root chain child info to that cluster.
  * @param root_chain_second_child Info of the second child for the bottom root
  * chain cluster.
  * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
@@ -2067,13 +2085,13 @@ void write_all_clusters_to_file_including_invalid_clusters(
 
 /**
  * @brief Go through all clusters and get valid clusters. Store valid clusters
- * and their information in the valid_clusters_map. Erase invalid clusters from
- * root_chain_cluster_map, chain_map, and leaf_cluster_map.
+ * and their information in the valid_clusters_map. Erase invalid clusters
+ * from root_chain_cluster_map, chain_map, and leaf_cluster_map.
  *
  * @param valid_cluster_map An empty YGM map of valid cluster name -> valid
  * cluster info.
- * @param root_chain_min_edge_id The smallest cluster edge id in the root chain.
- * We write the second root chain child info to that cluster.
+ * @param root_chain_min_edge_id The smallest cluster edge id in the root
+ * chain. We write the second root chain child info to that cluster.
  * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
  * chain cluster info.
  * @param chain_map YGM map of chain name -> (cluster map, chain info).
@@ -2173,8 +2191,8 @@ void get_and_keep_valid_clusters_only(
   chain_map.for_all(get_valid_chain_clusters);
   comm.barrier();
 
-  // Root chain clusters are all valid, just transfer them to the valid cluster
-  // map
+  // Root chain clusters are all valid, just transfer them to the valid
+  // cluster map
   auto get_valid_root_chain_clusters =
       [&valid_cluster_map](const id_t                    &cluster_edge_id,
                            const root_chain_cluster_info &cluster_info) {
@@ -2233,8 +2251,9 @@ void get_and_keep_valid_clusters_only(
 
 /**
  * @brief Fill in the valid parent/child clusters of clusters in the
- * valid_cluster_map. Do this by going through chains by their contraction round
- * and send valid clusters up the hierarchy to find their valid parent cluster.
+ * valid_cluster_map. Do this by going through chains by their contraction
+ * round and send valid clusters up the hierarchy to find their valid parent
+ * cluster.
  *
  * @param valid_cluster_map An empty YGM map of valid cluster name -> valid
  * cluster info.
@@ -2290,12 +2309,12 @@ void get_valid_cluster_parent_child_relations(
       // Find the first chain map key <= parent edge id
       auto it = chain.first.lower_bound(parent_edge_id);
 
-      // If this chain has no valid clusters, or we didn't find a cluster in the
-      // chain above our parent edge id, send ourselves on to the parent chain
-      // to continue searching for a parent
+      // If this chain has no valid clusters, or we didn't find a cluster in
+      // the chain above our parent edge id, send ourselves on to the parent
+      // chain to continue searching for a parent
       if (chain.first.size() == 0 || it == chain.first.end()) {
-        // If the parent chain is the root chain, then we know its valid parent
-        // cluster and set it
+        // If the parent chain is the root chain, then we know its valid
+        // parent cluster and set it
         if (chain.second.parent_chain == root_chain_supernode) {
           cluster_name_t parent_cluster_name =
               std::make_pair(root_chain_supernode, chain.second.parent_edge_id);
@@ -2306,9 +2325,9 @@ void get_valid_cluster_parent_child_relations(
           valid_cluster_map_ptr->async_visit(parent_cluster_name, set_child,
                                              child_cluster_name);
         }
-        // Otherwise, we are now looking for the parent cluster for this chain,
-        // so we visit the parent chain and send along the parent edge id of the
-        // chain
+        // Otherwise, we are now looking for the parent cluster for this
+        // chain, so we visit the parent chain and send along the parent edge
+        // id of the chain
         chain_map_ptr->async_visit(
             chain.second.parent_chain,
             send_valid_cluster_to_valid_parent_functor(), child_cluster_name,
@@ -2339,8 +2358,8 @@ void get_valid_cluster_parent_child_relations(
         cluster_name_t child_cluster_name =
             std::make_pair(leaf_cluster_supernode, 0);
 
-        // If the parent chain is the root chain, then we know its valid parent
-        // cluster and set it
+        // If the parent chain is the root chain, then we know its valid
+        // parent cluster and set it
         if (cluster_info.parent_chain == root_chain_supernode) {
           cluster_name_t parent_cluster_name =
               std::make_pair(root_chain_supernode, cluster_info.parent_edge_id);
@@ -2364,8 +2383,8 @@ void get_valid_cluster_parent_child_relations(
   leaf_cluster_map.for_all(send_valid_leaf_clusters_to_parent);
   comm.barrier();
 
-  // Do each chains from each round of contraction in order and get parent/child
-  // relations by climbing up the hierarchy
+  // Do each chains from each round of contraction in order and get
+  // parent/child relations by climbing up the hierarchy
   for (int round = 2; round <= final_round; ++round) {
     auto visit_chains_this_round =
         [valid_cluster_map_ptr, chain_map_ptr, round](
@@ -2374,8 +2393,8 @@ void get_valid_cluster_parent_child_relations(
                 &chain) {
           if (chain_name.second == round) {
             if (chain.first.size() > 0) {
-              // Go to the top cluster in this chain and send it up to find its
-              // parent
+              // Go to the top cluster in this chain and send it up to find
+              // its parent
               auto              it              = chain.first.rbegin();
               id_t              cluster_edge_id = it->first;
               full_cluster_info cluster_info    = it->second;
@@ -2425,10 +2444,12 @@ void write_valid_clusters_to_file(
     std::filesystem::path cluster_file_path,
     ygm::container::map<cluster_name_t, full_valid_cluster_info>
         &valid_cluster_map) {
-  ygm::comm &comm = valid_cluster_map.comm();
-
   // Create output file stream
   std::ofstream ofs(cluster_file_path);
+  if (!ofs.is_open()) {
+    std::cout << "Unable to open cluster info file: "
+              << cluster_file_path.string();
+  }
 
   // Write header
   ofs << "cluster_name,size,stability,stability_traversing_up,"
@@ -2452,7 +2473,8 @@ void write_valid_clusters_to_file(
        << "," << cluster_info.num_points_added;
     ofs << ss.str() << "\n";
   }
-  comm.barrier();
+  ofs.flush();
+  ofs.close();
 }
 
 }  // namespace clams::clustering

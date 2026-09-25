@@ -1084,13 +1084,22 @@ int main(int argc, char *argv[]) {
     {
       sw_step.reset();
 
+      // Traverse down the child chains for cluster selection from all root
+      // chain clusters above the selected one (if there is one)
+      local_selected_clusters = traverse_down_hierarchy_and_select_clusters(
+          root_chain_cluster_map, chain_map, leaf_cluster_map,
+          root_chain_second_child, min_cluster_size, root_chain_supernode,
+          selected_root_chain_cluster_edge_id);
+      world.barrier();
+
       // If we selected a root chain cluster as a flat cluster, set it as
       // selected and add it to local selected clusters on rank 0. This is the
       // first cluster selected, so it will have cluster id 0.
       if (world.rank() == 0 && selected_root_chain_cluster_edge_id > 0) {
         cluster_name_t cluster_name = std::make_pair(
             root_chain_supernode, selected_root_chain_cluster_edge_id);
-        local_selected_clusters.push_back(cluster_name);
+        local_selected_clusters.insert(local_selected_clusters.begin(),
+                                       cluster_name);
         root_chain_cluster_map.async_visit(
             selected_root_chain_cluster_edge_id,
             []([[maybe_unused]] const id_t &cluster_edge_id,
@@ -1099,13 +1108,6 @@ int main(int argc, char *argv[]) {
             });
       }
       world.barrier();
-
-      // Traverse down the child chains for cluster selection from all root
-      // chain clusters above the selected one (if there is one)
-      local_selected_clusters = traverse_down_hierarchy_and_select_clusters(
-          root_chain_cluster_map, chain_map, leaf_cluster_map,
-          root_chain_second_child, min_cluster_size, root_chain_supernode,
-          selected_root_chain_cluster_edge_id);
 
       select_clusters_time += sw_step.elapsed().count();
 
@@ -1178,6 +1180,8 @@ int main(int argc, char *argv[]) {
   {
     sw_step.reset();
 
+    id_t num_points_clustered = 0;
+
     int num_files = world.size();
     if (world.rank() == 0) {
       spdlog::info("Writing {} files containing cluster labels to: {}",
@@ -1198,12 +1202,18 @@ int main(int argc, char *argv[]) {
     label_ofs << "# point_id\tcluster_id\n";
     for (const auto &[point_id, cluster_id] : point_to_cluster_id_map) {
       label_ofs << point_id << "\t" << cluster_id << "\n";
+      if (cluster_id >= 0) {
+        ++num_points_clustered;
+      }
     }
     label_ofs.flush();
     label_ofs.close();
     world.barrier();
 
+    id_t total_num_points_clustered = ygm::sum(num_points_clustered, world);
     if (world.rank() == 0) {
+      spdlog::info("Number of points clustered: {}",
+                   total_num_points_clustered);
       spdlog::info("  Time to write point labels (s): {:.3f}", sw_step);
     }
   }
@@ -1259,8 +1269,14 @@ int main(int argc, char *argv[]) {
       }
       sw_step.reset();
 
-      write_valid_clusters_to_file(cluster_file_path, valid_cluster_map);
+      id_t total_num_points_clustered =
+          write_valid_clusters_to_file(cluster_file_path, valid_cluster_map);
       world.barrier();
+
+      if (world.rank() == 0) {
+        spdlog::info("  Sum of sizes of selected clusters: {}",
+                     total_num_points_clustered);
+      }
     }
 
     if (world.rank() == 0) {

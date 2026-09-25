@@ -2432,18 +2432,24 @@ void get_valid_cluster_parent_child_relations(
 }
 
 /**
- * @brief Writes information on valid clusters to file, disregarding
- * min_cluster_size.
+ * @brief Writes information on valid clusters to file.
  *
  * @param cluster_file_path File to write cluster data to. Each rank must
  * receive its own file name (e.g., path_to_cluster_data/rank.csv).
  * @param valid_cluster_map YGM map of valid clusters mapping cluster name ->
  * valid cluster info.
+ *
+ * @return The sum of sizes of all selected clusters.
+ * This is a sanity check against the number of points clustered.
  */
-void write_valid_clusters_to_file(
+id_t write_valid_clusters_to_file(
     std::filesystem::path cluster_file_path,
     ygm::container::map<cluster_name_t, full_valid_cluster_info>
         &valid_cluster_map) {
+  ygm::comm &comm = valid_cluster_map.comm();
+
+  id_t num_points_clustered = 0;
+
   // Create output file stream
   std::ofstream ofs(cluster_file_path);
   if (!ofs.is_open()) {
@@ -2472,9 +2478,18 @@ void write_valid_clusters_to_file(
        << "\"" << cluster_info.children[1] << "\""
        << "," << cluster_info.num_points_added;
     ofs << ss.str() << "\n";
+
+    if (cluster_info.selected) {
+      num_points_clustered += cluster_info.size;
+    }
   }
   ofs.flush();
   ofs.close();
+  comm.barrier();
+
+  id_t total_num_points_clustered = ygm::sum(num_points_clustered, comm);
+
+  return total_num_points_clustered;
 }
 
 }  // namespace clams::clustering

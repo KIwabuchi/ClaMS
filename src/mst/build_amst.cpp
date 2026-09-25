@@ -208,7 +208,8 @@ std::vector<edge_t> approx_mst(const std::vector<edge_t> &edges,
   c.barrier();
   double amst_time = amst_timer.elapsed();
 
-  c.cout0() << "Trees: " << amst_builder.num_trees()
+  c.cout0() << "Approx bound: " << approx_bound
+            << "\nTrees: " << amst_builder.num_trees()
             << "\nEdges: " << sum(amst_builder.get_result().size(), c)
             << "\nTime: " << amst_time << std::endl;
 
@@ -398,6 +399,9 @@ int main(int argc, char **argv) {
                                   ? read_dnnd_output(txt_input_filenames, world)
                                   : read_pm_knng_output(pm_input_path, world);
   world.cout0("Edge reading time (s): ", read_timer.elapsed());
+  world.cout0() << "Total number of edges read: "
+                << ygm::sum(edges.size(), world) << std::endl;
+  world.barrier();
 
   auto amst_edges = approx_mst(edges, amst_approx_bound, world);
   world.cout0() << "AMST edges: " << sum(amst_edges.size(), world) << std::endl;

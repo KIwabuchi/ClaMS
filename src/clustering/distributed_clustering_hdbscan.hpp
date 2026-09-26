@@ -1341,11 +1341,13 @@ calculate_root_chain_size_stability(
   for (auto it = root_chain_array.local_begin();
        it != root_chain_array.local_end(); ++it) {
     root_chain_cluster_info cluster_info = it->value.second;
-    float                   stability    = cluster_info.lambda_min_edge *
-                          (cluster_info.size - cluster_info.num_points_added) +
-                      cluster_info.sum_lambda_edges_added -
-                      cluster_info.lambda_birth * cluster_info.size;
+    float                   stability =
+        (cluster_info.lambda_min_edge - cluster_info.lambda_birth) *
+            (cluster_info.size - cluster_info.num_points_added) +
+        cluster_info.sum_lambda_edges_added -
+        (cluster_info.lambda_birth * cluster_info.num_points_added);
     it->value.second.stability = stability;
+
     if (it->value.second.stability >=
         it->value.second.stability_traversing_up) {
       local_possible_clusters_for_selection.push_back(it->value);
@@ -1717,7 +1719,7 @@ std::vector<cluster_name_t> traverse_down_hierarchy_and_select_clusters(
  * @param root_chain_cluster_edges_map YGM map of root chain cluster edge id ->
  * vector of edges added to this cluster.
  * @param point_to_cluster_id_map An empty YGM map of point id -> cluster label.
- * @param edge_endpoints_map YGM map of edge id -> pair of point ids of its
+ * @param edge_endpoints_array YGM array of edge id -> pair of point ids of its
  * endpoints.
  * @param local_selected_clusters Vector of selected clusters to process on this
  * rank.
@@ -1735,23 +1737,23 @@ void assign_points_cluster_ids(
     ygm::container::map<supernode_t, full_leaf_cluster_info> &leaf_cluster_map,
     ygm::container::map<id_t, root_chain_cluster_info> &root_chain_cluster_map,
     ygm::container::map<id_t, std::vector<edge_id_with_dist_t>>
-                                            &root_chain_cluster_edges_map,
-    ygm::container::map<id_t, cluster_id_t> &point_to_cluster_id_map,
-    ygm::container::map<id_t, std::pair<id_t, id_t>> &edge_endpoints_map,
-    const std::vector<cluster_name_t>                &local_selected_clusters,
+                                                 &root_chain_cluster_edges_map,
+    ygm::container::map<id_t, cluster_id_t>      &point_to_cluster_id_map,
+    ygm::container::array<std::pair<id_t, id_t>> &edge_endpoints_array,
+    const std::vector<cluster_name_t>            &local_selected_clusters,
     const cluster_id_t start_cluster_id, const supernode_t root_chain_supernode,
     const supernode_t root_chain_second_child_name) {
-  ygm::comm &comm                   = chain_map.comm();
-  auto       edge_endpoints_map_ptr = edge_endpoints_map.get_ygm_ptr();
-  auto point_to_cluster_id_map_ptr  = point_to_cluster_id_map.get_ygm_ptr();
-  auto leaf_cluster_map_ptr         = leaf_cluster_map.get_ygm_ptr();
-  auto chain_map_ptr                = chain_map.get_ygm_ptr();
+  ygm::comm &comm                     = chain_map.comm();
+  auto       edge_endpoints_array_ptr = edge_endpoints_array.get_ygm_ptr();
+  auto point_to_cluster_id_map_ptr    = point_to_cluster_id_map.get_ygm_ptr();
+  auto leaf_cluster_map_ptr           = leaf_cluster_map.get_ygm_ptr();
+  auto chain_map_ptr                  = chain_map.get_ygm_ptr();
   auto root_chain_cluster_edges_map_ptr =
       root_chain_cluster_edges_map.get_ygm_ptr();
 
   // All points in the data set start out as noise points and when we
   // pick clusters, this will be over written with the cluster id
-  edge_endpoints_map.for_all(
+  edge_endpoints_array.for_all(
       [&point_to_cluster_id_map]([[maybe_unused]] const id_t &edge_id,
                                  const std::pair<id_t, id_t> &edge_endpoints) {
         point_to_cluster_id_map.async_insert(edge_endpoints.first,
@@ -1783,10 +1785,10 @@ void assign_points_cluster_ids(
   static auto label_leaf_cluster_edge_endpoints_lambda =
       [](const supernode_t            &cluster_name,
          const full_leaf_cluster_info &cluster_info,
-         const cluster_id_t &cluster_id, auto edge_endpoints_map_ptr,
+         const cluster_id_t &cluster_id, auto edge_endpoints_array_ptr,
          auto point_to_cluster_id_map_ptr) {
         for (const edge_id_with_dist_t &edge : cluster_info.edges) {
-          edge_endpoints_map_ptr->async_visit(
+          edge_endpoints_array_ptr->async_visit(
               edge.first, label_edge_endpoints_lambda, cluster_id,
               point_to_cluster_id_map_ptr);
         }
@@ -1796,10 +1798,10 @@ void assign_points_cluster_ids(
   // points with the provided cluster id
   static auto label_root_chain_cluster_edge_endpoints_lambda =
       [](const id_t &cluster_edge_id, std::vector<edge_id_with_dist_t> &edges,
-         const cluster_id_t &cluster_id, auto edge_endpoints_map_ptr,
+         const cluster_id_t &cluster_id, auto edge_endpoints_array_ptr,
          auto point_to_cluster_id_map_ptr) {
         for (const edge_id_with_dist_t &edge : edges) {
-          edge_endpoints_map_ptr->async_visit(
+          edge_endpoints_array_ptr->async_visit(
               edge.first, label_edge_endpoints_lambda, cluster_id,
               point_to_cluster_id_map_ptr);
         }
@@ -1820,8 +1822,8 @@ void assign_points_cluster_ids(
         const id_t &starting_cluster_edge_id, const cluster_id_t &cluster_id,
         ygm::ygm_ptr<ygm::container::map<supernode_t, full_leaf_cluster_info>>
             leaf_cluster_map_ptr,
-        ygm::ygm_ptr<ygm::container::map<id_t, std::pair<id_t, id_t>>>
-            edge_endpoints_map_ptr,
+        ygm::ygm_ptr<ygm::container::array<std::pair<id_t, id_t>>>
+            edge_endpoints_array_ptr,
         ygm::ygm_ptr<ygm::container::map<id_t, cluster_id_t>>
             point_to_cluster_id_map_ptr) {
       // For all clusters in the chain below or equal to the provided starting
@@ -1838,7 +1840,7 @@ void assign_points_cluster_ids(
 
           // Label each edge in the cluster with the provided label
           for (const edge_id_with_dist_t &edge : cluster_info.edges) {
-            edge_endpoints_map_ptr->async_visit(
+            edge_endpoints_array_ptr->async_visit(
                 edge.first, label_edge_endpoints_lambda, cluster_id,
                 point_to_cluster_id_map_ptr);
           }
@@ -1848,13 +1850,13 @@ void assign_points_cluster_ids(
           if (cluster_info.child.second == 1) {
             leaf_cluster_map_ptr->async_visit(
                 cluster_info.child, label_leaf_cluster_edge_endpoints_lambda,
-                cluster_id, edge_endpoints_map_ptr,
+                cluster_id, edge_endpoints_array_ptr,
                 point_to_cluster_id_map_ptr);
           } else {
             chain_map_ptr->async_visit(
                 cluster_info.child, label_points_functor(),
                 std::numeric_limits<id_t>::max(), cluster_id,
-                leaf_cluster_map_ptr, edge_endpoints_map_ptr,
+                leaf_cluster_map_ptr, edge_endpoints_array_ptr,
                 point_to_cluster_id_map_ptr);
           }
         }
@@ -1864,12 +1866,12 @@ void assign_points_cluster_ids(
       if (chain.second.children[1].second == 1) {
         leaf_cluster_map_ptr->async_visit(
             chain.second.children[1], label_leaf_cluster_edge_endpoints_lambda,
-            cluster_id, edge_endpoints_map_ptr, point_to_cluster_id_map_ptr);
+            cluster_id, edge_endpoints_array_ptr, point_to_cluster_id_map_ptr);
       } else {
         chain_map_ptr->async_visit(
             chain.second.children[1], label_points_functor(),
             std::numeric_limits<id_t>::max(), cluster_id, leaf_cluster_map_ptr,
-            edge_endpoints_map_ptr, point_to_cluster_id_map_ptr);
+            edge_endpoints_array_ptr, point_to_cluster_id_map_ptr);
       }
     }
   };
@@ -1887,7 +1889,7 @@ void assign_points_cluster_ids(
     if (cluster_name.first.second == 1) {
       leaf_cluster_map.async_visit(
           cluster_name.first, label_leaf_cluster_edge_endpoints_lambda,
-          cluster_id, edge_endpoints_map_ptr, point_to_cluster_id_map_ptr);
+          cluster_id, edge_endpoints_array_ptr, point_to_cluster_id_map_ptr);
     }
     // If the selected cluster is in the root chain (there will be at most 1),
     // then store its edge id and cluster id for processing separately
@@ -1900,7 +1902,7 @@ void assign_points_cluster_ids(
     else {
       chain_map.async_visit(cluster_name.first, label_points_functor(),
                             cluster_name.second, cluster_id,
-                            leaf_cluster_map_ptr, edge_endpoints_map_ptr,
+                            leaf_cluster_map_ptr, edge_endpoints_array_ptr,
                             point_to_cluster_id_map_ptr);
     }
   }
@@ -1916,7 +1918,7 @@ void assign_points_cluster_ids(
     auto label_root_chain_cluster_lambda =
         [selected_root_chain_cluster_edge_id, selected_root_chain_cluster_id,
          chain_map_ptr, leaf_cluster_map_ptr, root_chain_cluster_edges_map_ptr,
-         edge_endpoints_map_ptr,
+         edge_endpoints_array_ptr,
          point_to_cluster_id_map_ptr](const id_t              &cluster_edge_id,
                                       root_chain_cluster_info &cluster_info) {
           // If this root chain cluster is the selected cluster or below it,
@@ -1928,7 +1930,7 @@ void assign_points_cluster_ids(
             // Label this cluster's edges added
             root_chain_cluster_edges_map_ptr->async_visit(
                 cluster_edge_id, label_root_chain_cluster_edge_endpoints_lambda,
-                selected_root_chain_cluster_id, edge_endpoints_map_ptr,
+                selected_root_chain_cluster_id, edge_endpoints_array_ptr,
                 point_to_cluster_id_map_ptr);
 
             // Visit this cluster's non-root-chain child and label it
@@ -1936,7 +1938,7 @@ void assign_points_cluster_ids(
             if (cluster_info.child.second == 1) {
               leaf_cluster_map_ptr->async_visit(
                   cluster_info.child, label_leaf_cluster_edge_endpoints_lambda,
-                  selected_root_chain_cluster_id, edge_endpoints_map_ptr,
+                  selected_root_chain_cluster_id, edge_endpoints_array_ptr,
                   point_to_cluster_id_map_ptr);
             }
             // If its a chain, go visit it with the label points functor
@@ -1945,7 +1947,7 @@ void assign_points_cluster_ids(
                   cluster_info.child, label_points_functor(),
                   std::numeric_limits<id_t>::max(),
                   selected_root_chain_cluster_id, leaf_cluster_map_ptr,
-                  edge_endpoints_map_ptr, point_to_cluster_id_map_ptr);
+                  edge_endpoints_array_ptr, point_to_cluster_id_map_ptr);
             }
           }
         };
@@ -1956,13 +1958,13 @@ void assign_points_cluster_ids(
       leaf_cluster_map.async_visit(root_chain_second_child_name,
                                    label_leaf_cluster_edge_endpoints_lambda,
                                    selected_root_chain_cluster_id,
-                                   edge_endpoints_map_ptr,
+                                   edge_endpoints_array_ptr,
                                    point_to_cluster_id_map_ptr);
     } else {
       chain_map.async_visit(
           root_chain_second_child_name, label_points_functor(),
           std::numeric_limits<id_t>::max(), selected_root_chain_cluster_id,
-          leaf_cluster_map_ptr, edge_endpoints_map_ptr,
+          leaf_cluster_map_ptr, edge_endpoints_array_ptr,
           point_to_cluster_id_map_ptr);
     }
   }

@@ -458,6 +458,7 @@ std::ostream &operator<<(std::ostream                  &os,
      << ", size = " << cluster.size << ", selected = " << cluster.selected
      << ", num_points_added = " << cluster.num_points_added
      << ", sum_lambda_edges_added = " << cluster.sum_lambda_edges_added
+     << ", lambda min edge = " << cluster.lambda_min_edge
      << ", lambda birth = " << cluster.lambda_birth
      << ", parent edge id = " << cluster.parent_edge_id
      << ", non-chain child: " << cluster.child << " with size "

@@ -25,13 +25,13 @@ namespace clams::clustering {
  * contraction map so we can clear it and save space
  *
  * @param alpha_edge_map An empty YGM map of alpha edge id -> alpha edge info.
- * @param edge_contraction_map YGM map of edge id -> edge contraction info.
+ * @param edge_contraction_array YGM array of edge id -> edge contraction info.
  * @param root_chain_supernode Supernode name for the root chain.
  */
 void fill_alpha_edge_map(
-    ygm::container::map<id_t, alpha_edge_info>       &alpha_edge_map,
-    ygm::container::map<id_t, edge_contraction_info> &edge_contraction_map,
-    const supernode_t                                &root_chain_supernode) {
+    ygm::container::map<id_t, alpha_edge_info>   &alpha_edge_map,
+    ygm::container::array<edge_contraction_info> &edge_contraction_array,
+    const supernode_t                            &root_chain_supernode) {
   ygm::comm &comm                = alpha_edge_map.comm();
   auto       set_alpha_edge_info = [&alpha_edge_map, &root_chain_supernode](
                                  const id_t                  &edge_id,
@@ -51,7 +51,7 @@ void fill_alpha_edge_map(
                                  chain_supernode);
     }
   };
-  edge_contraction_map.for_all(set_alpha_edge_info);
+  edge_contraction_array.for_all(set_alpha_edge_info);
   comm.barrier();
 }
 
@@ -59,7 +59,7 @@ void fill_alpha_edge_map(
  * @brief Goes through the edge contraction map and assigns all edges to chains,
  * represented by their supernode.
  *
- * @param edge_contraction_map YGM map of edge id -> edge contraction info.
+ * @param edge_contraction_array YGM array of edge id -> edge contraction info.
  * @param chain_map An empty YGM map of chain name (supernode) -> pair of
  * (cluster map, chain info). The cluster map goes from edge id -> full cluster
  * info, and the chain info stores the required chain info that doesn't go in
@@ -75,15 +75,15 @@ void fill_alpha_edge_map(
  * tell which edges belong to the root chain.
  */
 void assign_edges_to_chains(
-    ygm::container::map<id_t, edge_contraction_info> &edge_contraction_map,
+    ygm::container::array<edge_contraction_info>    &edge_contraction_array,
     ygm::container::map<supernode_t,
                         std::pair<std::map<id_t, full_cluster_info>,
-                                  full_chain_info>>  &chain_map,
+                                  full_chain_info>> &chain_map,
     std::vector<edge_id_with_dist_t>         &local_root_chain_alpha_edges,
     ygm::container::set<edge_id_with_dist_t> &root_chain_non_alpha_edge_set,
     ygm::container::map<supernode_t, full_leaf_cluster_info> &leaf_cluster_map,
     const uint32_t                                            final_round) {
-  ygm::comm &comm = edge_contraction_map.comm();
+  ygm::comm &comm = edge_contraction_array.comm();
 
   static auto add_alpha_edge_to_chain_lambda =
       []([[maybe_unused]] const supernode_t &chain_name,
@@ -162,7 +162,7 @@ void assign_edges_to_chains(
           }
         }
       };
-  edge_contraction_map.for_all(assign_edge_to_chain_lambda);
+  edge_contraction_array.for_all(assign_edge_to_chain_lambda);
   comm.barrier();
 }
 
@@ -710,10 +710,11 @@ supernode_t fill_missing_root_chain_cluster_info(
                    full_root_chain_cluster_array_ptr) {
               // Calculate num points added and sum lambda edges added for this
               // cluster
-              id_t       num_points_added       = edges.size() - 1;
-              distance_t sum_lambda_edges_added = 0.0;
+              id_t       num_points_added = edges.size() - 1;
+              distance_t sum_lambda_edges_added_including_min_edge = 0.0;
               for (auto &edge : edges) {
-                sum_lambda_edges_added += lambda_from_dist(edge.second);
+                sum_lambda_edges_added_including_min_edge +=
+                    lambda_from_dist(edge.second);
               }
 
               // Set the values in the cluster array
@@ -722,12 +723,14 @@ supernode_t fill_missing_root_chain_cluster_info(
                   [](const id_t                               &index,
                      std::pair<id_t, root_chain_cluster_info> &value,
                      const id_t                               &num_points_added,
-                     const distance_t &sum_lambda_edges_added) {
+                     const distance_t
+                         &sum_lambda_edges_added_including_min_edge) {
                     value.second.num_points_added = num_points_added;
                     value.second.sum_lambda_edges_added =
-                        sum_lambda_edges_added;
+                        sum_lambda_edges_added_including_min_edge -
+                        value.second.lambda_min_edge;
                   },
-                  num_points_added, sum_lambda_edges_added);
+                  num_points_added, sum_lambda_edges_added_including_min_edge);
             };
 
         root_chain_cluster_edges_map.async_visit(

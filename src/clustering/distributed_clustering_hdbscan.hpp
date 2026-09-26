@@ -1502,7 +1502,7 @@ std::pair<id_t, int> correct_root_chain_stability_traversing_up(
     id_t last_local_index = first_local_index +
                             possible_clusters_for_selection_array.local_size() -
                             1;
-    if (lowest_cluster_to_correct_idx + 1 < last_local_index) {
+    if (lowest_cluster_to_correct_idx < last_local_index) {
       for (auto it = possible_clusters_for_selection_array.local_begin();
            it != possible_clusters_for_selection_array.local_end(); ++it) {
         if (it->index > lowest_cluster_to_correct_idx) {

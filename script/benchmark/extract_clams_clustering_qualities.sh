@@ -34,7 +34,7 @@ for file in "$@"; do
     /kNNG k:/ || /^[[:space:]]*k:[[:space:]]*[0-9]+[[:space:]]*$/ { k = lastfield($0); next }
     /Min cluster size/       { mcs = lastfield($0); next }
     /MST-based cluster guess/ { mst_clustering = lastfield($0); next }
-    /#of final clusters/     { fc = lastfield($0); next }
+    /Number of flat clusters:/     { fc = lastfield($0); next }
     /Cluster coverage \(%\)/ { coverage = lastfield($0); next }
     /ARI/                    { ari = lastfield($0); have_ari = 1; next }
     /AMI/ {

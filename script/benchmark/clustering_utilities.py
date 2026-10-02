@@ -220,7 +220,7 @@ def read_label_data(data_path):
                 label = int(line)
 
             if pid in labels_dict:
-                print(f"Duplicate ID in the ground truth file: {pid}")
+                print(f"Duplicate ID in the input files: {pid}")
                 exit(1)
             labels_dict[pid] = label
 

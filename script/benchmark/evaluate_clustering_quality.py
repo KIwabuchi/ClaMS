@@ -37,7 +37,7 @@ import os
 import argparse
 import numpy as np
 from clustering_utilities import *
-
+from script.utilities import *
 
 def parse_options():
     parser = argparse.ArgumentParser(
@@ -63,8 +63,8 @@ def parse_options():
 def main():
     opt = parse_options()
 
-    cluster_labels = read_label_data(opt.cluster_path)
-    true_labels = read_label_data(opt.gt_path)
+    cluster_labels = read_cluster_labels(opt.cluster_path, "*")
+    true_labels = read_cluster_labels(opt.gt_path, "*")
 
     try:
         eval_clusters(cluster_labels, true_labels, opt.singleton_noise_points, opt.ignore_true_noise_points)

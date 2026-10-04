@@ -18,7 +18,7 @@ import time
 
 from clustering_utilities import *
 from bench_utilities import *
-
+from script.utilities import *
 
 def parse_options():
     parser = argparse.ArgumentParser(
@@ -101,7 +101,7 @@ def run_hdbscan(points, min_cluster_size, min_samples,
     # Evaluate the clustering quality
     if gt_file:
         print('\nLoading ground truth data')
-        gt_labels = read_label_data(gt_file)
+        gt_labels = read_cluster_labels(gt_file, "*")
 
         print('\nEvaluating clustering quality')
         eval_clusters(clusters.labels_, gt_labels)
@@ -152,7 +152,7 @@ def main():
     opts = parse_options()
 
 
-    points = read_point_data(opts.point_data_path, opts.has_ids)
+    points = read_points(opts.point_data_path, "*", opts.has_ids)
 
     min_cluster_size_list = parse_range(opts.min_cluster_size_range)
     min_samples_list = parse_range(opts.min_samples_range)

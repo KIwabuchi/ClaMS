@@ -28,7 +28,8 @@ import os
 import argparse
 import numpy as np
 from script.benchmark.clustering_utilities import *
-
+from script.utilities import *
+from script.data_readers import *
 
 def main():
     parser = argparse.ArgumentParser(
@@ -43,7 +44,7 @@ def main():
                         help='Path to the output file')
     args = parser.parse_args()
 
-    cluster_ids = read_label_data(args.input_cluster_ids_path)
+    cluster_ids = read_cluster_labels(args.input_cluster_ids_path, "*")
 
     # Make new cluster IDs
     new_ids = dict()

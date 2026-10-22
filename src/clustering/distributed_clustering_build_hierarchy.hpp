@@ -41,12 +41,12 @@ void fill_alpha_edge_map(
       if (edge.chain_parent_edge_id > 0) {
         chain_supernode = edge.chain_supernode;
       }
-      auto set_info_lambda = [](const id_t &edge_id, alpha_edge_info &edge,
-                                const distance_t  &distance,
-                                const supernode_t &chain_supernode) {
-        edge.distance        = distance;
-        edge.chain_supernode = chain_supernode;
-      };
+      auto set_info_lambda =
+          []([[maybe_unused]] const id_t &edge_id, alpha_edge_info &edge,
+             const distance_t &distance, const supernode_t &chain_supernode) {
+            edge.distance        = distance;
+            edge.chain_supernode = chain_supernode;
+          };
       alpha_edge_map.async_visit(edge_id, set_info_lambda, edge.distance,
                                  chain_supernode);
     }
@@ -437,7 +437,7 @@ void fill_missing_non_root_chain_cluster_info(
   // Go through each non-root chain and for each cluster fill in the birth
   // distance
   auto set_birth_distance_lambda =
-      [](const supernode_t &chain_name,
+      []([[maybe_unused]] const supernode_t &chain_name,
          std::pair<std::map<id_t, full_cluster_info>, full_chain_info> &chain) {
         // The ith cluster has birth distance equal to the min edge distance of
         // the (i+1)th cluster
@@ -463,12 +463,12 @@ void fill_missing_non_root_chain_cluster_info(
               &chain) {
         id_t parent_edge_id = chain.second.parent_edge_id;
         // Visit the parent edge in the alpha edge map and get its chain
-        auto visit_alpha_edge_lambda = [](const id_t            &edge_id,
+        auto visit_alpha_edge_lambda = []([[maybe_unused]] const id_t &edge_id,
                                           const alpha_edge_info &edge_info,
                                           const supernode_t     &chain_name,
                                           auto chain_map_ptr) {
           auto set_parent_chain_and_top_birth_dist =
-              [](const supernode_t &chain_name,
+              []([[maybe_unused]] const supernode_t &chain_name,
                  std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                                    &chain,
                  const supernode_t &parent_chain,
@@ -511,7 +511,7 @@ void fill_missing_non_root_chain_cluster_info(
       }
 
       auto set_bottom_children_lambda =
-          [](const supernode_t &chain_name,
+          []([[maybe_unused]] const supernode_t &chain_name,
              std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                                               &chain,
              const std::array<supernode_t, 2> &children) {
@@ -537,7 +537,7 @@ void fill_missing_non_root_chain_cluster_info(
       }
 
       auto set_child_lambda =
-          [](const supernode_t &chain_name,
+          []([[maybe_unused]] const supernode_t &chain_name,
              std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                         &chain,
              const id_t &cluster_edge_id, const supernode_t &child) {
@@ -588,24 +588,25 @@ void fill_missing_leaf_cluster_info(
                                      const supernode_t      &cluster_name,
                                      full_leaf_cluster_info &cluster_info) {
     // Visit the parent edge in the alpha edge map and get its chain
-    auto visit_alpha_edge_lambda =
-        [](const id_t &edge_id, const alpha_edge_info &edge_info,
-           const supernode_t &cluster_name, auto leaf_cluster_map_ptr) {
-          auto set_parent_chain_and_top_birth_dist =
-              [](const supernode_t      &cluster_name,
-                 full_leaf_cluster_info &cluster_info,
-                 const supernode_t      &parent_chain,
-                 const distance_t       &parent_edge_distance) {
-                // Set the chain parent
-                cluster_info.parent_chain = parent_chain;
+    auto visit_alpha_edge_lambda = []([[maybe_unused]] const id_t &edge_id,
+                                      const alpha_edge_info       &edge_info,
+                                      const supernode_t           &cluster_name,
+                                      auto leaf_cluster_map_ptr) {
+      auto set_parent_chain_and_top_birth_dist =
+          []([[maybe_unused]] const supernode_t &cluster_name,
+             full_leaf_cluster_info             &cluster_info,
+             const supernode_t                  &parent_chain,
+             const distance_t                   &parent_edge_distance) {
+            // Set the chain parent
+            cluster_info.parent_chain = parent_chain;
 
-                // Set the birth distance for the last cluster in the chain
-                cluster_info.birth_distance = parent_edge_distance;
-              };
-          leaf_cluster_map_ptr->async_visit(
-              cluster_name, set_parent_chain_and_top_birth_dist,
-              edge_info.chain_supernode, edge_info.distance);
-        };
+            // Set the birth distance for the last cluster in the chain
+            cluster_info.birth_distance = parent_edge_distance;
+          };
+      leaf_cluster_map_ptr->async_visit(
+          cluster_name, set_parent_chain_and_top_birth_dist,
+          edge_info.chain_supernode, edge_info.distance);
+    };
     alpha_edge_map.async_visit(cluster_info.parent_edge_id,
                                visit_alpha_edge_lambda, cluster_name,
                                leaf_cluster_map_ptr);
@@ -702,7 +703,7 @@ supernode_t fill_missing_root_chain_cluster_info(
       [&root_chain_cluster_edges_map, full_root_chain_cluster_array_ptr](
           const id_t &index, std::pair<id_t, root_chain_cluster_info> &value) {
         auto visit_cluster_edge_map =
-            [](const id_t                             &cluster_edge_id,
+            []([[maybe_unused]] const id_t            &cluster_edge_id,
                const std::vector<edge_id_with_dist_t> &edges,
                const id_t                             &array_index,
                ygm::ygm_ptr<ygm::container::array<
@@ -720,7 +721,7 @@ supernode_t fill_missing_root_chain_cluster_info(
               // Set the values in the cluster array
               full_root_chain_cluster_array_ptr->async_visit(
                   array_index,
-                  [](const id_t                               &index,
+                  []([[maybe_unused]] const id_t              &index,
                      std::pair<id_t, root_chain_cluster_info> &value,
                      const id_t                               &num_points_added,
                      const distance_t
@@ -787,7 +788,7 @@ supernode_t fill_missing_root_chain_cluster_info(
               // Set the child in the root chain cluster array
               full_root_chain_cluster_array_ptr->async_visit(
                   array_index,
-                  [](const id_t                               &index,
+                  []([[maybe_unused]] const id_t              &index,
                      std::pair<id_t, root_chain_cluster_info> &value,
                      const supernode_t &child) { value.second.child = child; },
                   child);

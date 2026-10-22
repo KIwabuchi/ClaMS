@@ -5,8 +5,11 @@
 #include <utility>
 #include <vector>
 
-#include <boost/unordered/unordered_flat_map.hpp>
 #include <cereal/types/array.hpp>
+
+#include <metall/container/vector.hpp>
+#include <metall/metall.hpp>
+#include <metall/utility/metall_mpi_adaptor.hpp>
 
 #include <ygm/comm.hpp>
 #include <ygm/container/array.hpp>
@@ -19,6 +22,11 @@
 #include "distributed_clustering_types.hpp"
 
 namespace clams::clustering {
+
+// Type for writing cluster labels to metal file as a vector of (point id,
+// cluster label) pairs
+using pm_point_to_cluster_id_t =
+    metall::container::vector<std::pair<id_t, cluster_id_t>>;
 
 /**
  * @brief Calculate cluster size, stability, and stability traversing up
@@ -48,8 +56,7 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
         std::pair<std::map<id_t, full_cluster_info>, full_chain_info>>>
         chain_map_ptr,
     ygm::ygm_ptr<ygm::container::map<supernode_t, full_leaf_cluster_info>>
-                leaf_cluster_map_ptr,
-    supernode_t chain_name = BLANK_SUPERNODE) {
+        leaf_cluster_map_ptr) {
   std::size_t chain_num_valid_clusters = 0;
 
   // Keep track of the chain's total size and stability traversing up so far
@@ -79,15 +86,15 @@ std::size_t calculate_chain_cluster_size_stability_from_children(
       chain_num_valid_clusters += 2;
 
       auto set_top_chain_cluster_as_valid =
-          [](const supernode_t &chain_name,
+          []([[maybe_unused]] const supernode_t &chain_name,
              std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                  &chain) {
             auto top_cluster_it                  = chain.first.rbegin();
             top_cluster_it->second.valid_cluster = true;
           };
       auto set_leaf_cluster_as_valid =
-          [](const supernode_t      &cluster_name,
-             full_leaf_cluster_info &cluster_info) {
+          []([[maybe_unused]] const supernode_t &cluster_name,
+             full_leaf_cluster_info             &cluster_info) {
             cluster_info.valid_cluster = true;
           };
 
@@ -305,7 +312,8 @@ std::size_t traverse_up_cluster_hierarchy_until_root_chain(
 
   // Lambda to send child cluster information to root chain cluster
   static auto send_child_to_root_chain_cluster =
-      [](const id_t &cluster_edge_id, root_chain_cluster_info &cluster_info,
+      []([[maybe_unused]] const id_t &cluster_edge_id,
+         root_chain_cluster_info     &cluster_info,
          const supernode_t &child_chain_name, id_t child_size,
          distance_t child_stability, distance_t child_stability_traversing_up) {
         if (cluster_info.child == child_chain_name) {
@@ -380,7 +388,7 @@ std::size_t traverse_up_cluster_hierarchy_until_root_chain(
         id_t chain_num_valid_clusters =
             calculate_chain_cluster_size_stability_from_children(
                 chain.first, chain.second, min_cluster_size, chain_map_ptr,
-                leaf_cluster_map_ptr, chain_name);
+                leaf_cluster_map_ptr);
         num_valid_clusters += chain_num_valid_clusters;
 
         auto top_cluster_it = chain.first.rbegin();
@@ -526,7 +534,7 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
     if (comm.rank() == 0) {
       chain_map.async_visit(
           root_chain_second_child.name,
-          [](const supernode_t &chain_name,
+          []([[maybe_unused]] const supernode_t &chain_name,
              std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                  &chain) {
             auto top_cluster_it = chain.first.rbegin();
@@ -614,7 +622,7 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
                  << root_chain_offshoot_supernode << std::endl;  // debug
 
     static auto set_new_parent_lambda =
-        [](const supernode_t &chain_name,
+        []([[maybe_unused]] const supernode_t &chain_name,
            std::pair<std::map<id_t, full_cluster_info>, full_chain_info> &chain,
            const supernode_t &parent_chain) {
           chain.second.parent_chain = parent_chain;
@@ -636,7 +644,7 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
 
       chain_map.async_visit(
           root_chain_offshoot_supernode,
-          [](const supernode_t &chain_name,
+          []([[maybe_unused]] const supernode_t &chain_name,
              std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                                    &chain,
              const full_chain_info &chain_info) { chain.second = chain_info; },
@@ -646,11 +654,11 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
                             root_chain_offshoot_supernode);
 
       auto get_first_child_lambda =
-          [](const id_t                    &cluster_edge_id,
+          []([[maybe_unused]] const id_t   &cluster_edge_id,
              const root_chain_cluster_info &cluster_info, auto chain_map_ptr) {
             chain_map_ptr->async_visit(
                 root_chain_offshoot_supernode,
-                [](const supernode_t &chain_name,
+                []([[maybe_unused]] const supernode_t &chain_name,
                    std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                                      &chain,
                    const supernode_t &child) {
@@ -695,7 +703,7 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
               .birth_distance = 1.0 / root_chain_cluster_info.lambda_birth,
           };
           auto add_cluster_to_chain_map_lambda =
-              [](const supernode_t &chain_name,
+              []([[maybe_unused]] const supernode_t &chain_name,
                  std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                                          &chain,
                  const id_t              &cluster_edge_id,
@@ -727,7 +735,7 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
                  std::vector<edge_id_with_dist_t> &edges, auto chain_map_ptr) {
                 chain_map_ptr->async_visit(
                     root_chain_offshoot_supernode,
-                    [](const supernode_t                      &chain_name,
+                    []([[maybe_unused]] const supernode_t     &chain_name,
                        std::pair<std::map<id_t, full_cluster_info>,
                                  full_chain_info>             &chain,
                        const id_t                             &cluster_edge_id,
@@ -764,7 +772,7 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
     if (comm.rank() == 0) {
       chain_map.async_visit(
           root_chain_offshoot_supernode,
-          [](const supernode_t &chain_name,
+          []([[maybe_unused]] const supernode_t &chain_name,
              std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                  &chain,
              ygm::ygm_ptr<ygm::container::map<
@@ -797,7 +805,7 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
       if (comm.rank() == 0) {
         chain_map.async_visit(
             root_chain_second_child.name,
-            [](const supernode_t &chain_name,
+            []([[maybe_unused]] const supernode_t &chain_name,
                std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                    &chain) {
               auto top_cluster_it = chain.first.rbegin();
@@ -825,7 +833,7 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
   if (comm.rank() == 0) {
     chain_map.async_visit(
         root_chain_second_child.name,
-        [](const supernode_t &chain_name,
+        []([[maybe_unused]] const supernode_t &chain_name,
            std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                &chain) {
           auto it                  = chain.first.rbegin();
@@ -1221,17 +1229,19 @@ void merge_invalid_root_chain_clusters(
   // Set the children of the post-merged root chain clusters as valid
   auto set_child_cluster_as_valid_lambda =
       [leaf_cluster_map_ptr, chain_map_ptr](
-          const id_t &cluster_edge_id, root_chain_cluster_info &cluster_info) {
+          [[maybe_unused]] const id_t &cluster_edge_id,
+          root_chain_cluster_info     &cluster_info) {
         if (cluster_info.child.second == 1) {
           leaf_cluster_map_ptr->async_visit(
-              cluster_info.child, [](const supernode_t      &cluster_name,
-                                     full_leaf_cluster_info &cluster_info) {
+              cluster_info.child,
+              []([[maybe_unused]] const supernode_t &cluster_name,
+                 full_leaf_cluster_info             &cluster_info) {
                 cluster_info.valid_cluster = true;
               });
         } else {
           chain_map_ptr->async_visit(
               cluster_info.child,
-              [](const supernode_t &chain_name,
+              []([[maybe_unused]] const supernode_t &chain_name,
                  std::pair<std::map<id_t, full_cluster_info>, full_chain_info>
                      &chain) {
                 auto it                  = chain.first.rbegin();
@@ -1268,8 +1278,7 @@ std::vector<std::pair<id_t, root_chain_cluster_info>>
 calculate_root_chain_size_stability(
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
                              &root_chain_array,
-    extra_child_cluster_info &root_chain_second_child, ygm::comm &comm,
-    const supernode_t root_chain_supernode) {
+    extra_child_cluster_info &root_chain_second_child, ygm::comm &comm) {
   // cluster size = sum of child cluster sizes + num points added
   // stability traversing up = max{stability, sum child stabilities
   // traversing up}
@@ -1603,8 +1612,9 @@ std::vector<cluster_name_t> traverse_down_hierarchy_and_select_clusters(
             // Select the child if it's a leaf cluster
             if (cluster_info.child.second == 1) {
               leaf_cluster_map_ptr->async_visit(
-                  cluster_info.child, [](const supernode_t      &cluster_name,
-                                         full_leaf_cluster_info &cluster_info) {
+                  cluster_info.child,
+                  []([[maybe_unused]] const supernode_t &cluster_name,
+                     full_leaf_cluster_info             &cluster_info) {
                     cluster_info.selected = true;
                   });
               local_selected_clusters.push_back(
@@ -1628,7 +1638,7 @@ std::vector<cluster_name_t> traverse_down_hierarchy_and_select_clusters(
               // Select the child if it's a leaf cluster
               if (child.second == 1) {
                 leaf_cluster_map_ptr->async_visit(
-                    child, [](const supernode_t      &cluster_name,
+                    child, []([[maybe_unused]] const supernode_t &cluster_name,
                               full_leaf_cluster_info &cluster_info) {
                       cluster_info.selected = true;
                     });
@@ -1657,8 +1667,9 @@ std::vector<cluster_name_t> traverse_down_hierarchy_and_select_clusters(
           // away invalid root chain clusters
           if (cluster_info.child.second == 1) {
             leaf_cluster_map_ptr->async_visit(
-                cluster_info.child, [](const supernode_t      &cluster_name,
-                                       full_leaf_cluster_info &cluster_info) {
+                cluster_info.child,
+                []([[maybe_unused]] const supernode_t &cluster_name,
+                   full_leaf_cluster_info             &cluster_info) {
                   cluster_info.selected = true;
                 });
             local_selected_clusters.push_back(
@@ -1681,8 +1692,8 @@ std::vector<cluster_name_t> traverse_down_hierarchy_and_select_clusters(
       if (root_chain_second_child.name.second == 1) {
         leaf_cluster_map_ptr->async_visit(
             root_chain_second_child.name,
-            [](const supernode_t      &cluster_name,
-               full_leaf_cluster_info &cluster_info) {
+            []([[maybe_unused]] const supernode_t &cluster_name,
+               full_leaf_cluster_info             &cluster_info) {
               cluster_info.selected = true;
             });
         local_selected_clusters.push_back(
@@ -1783,8 +1794,8 @@ void assign_points_cluster_ids(
   // Goes through all edges in a leaf cluster and labels their points with the
   // provided cluster id
   static auto label_leaf_cluster_edge_endpoints_lambda =
-      [](const supernode_t            &cluster_name,
-         const full_leaf_cluster_info &cluster_info,
+      []([[maybe_unused]] const supernode_t &cluster_name,
+         const full_leaf_cluster_info       &cluster_info,
          const cluster_id_t &cluster_id, auto edge_endpoints_array_ptr,
          auto point_to_cluster_id_map_ptr) {
         for (const edge_id_with_dist_t &edge : cluster_info.edges) {
@@ -1797,7 +1808,8 @@ void assign_points_cluster_ids(
   // Goes through all edges added to a root chain cluster and labels their
   // points with the provided cluster id
   static auto label_root_chain_cluster_edge_endpoints_lambda =
-      [](const id_t &cluster_edge_id, std::vector<edge_id_with_dist_t> &edges,
+      []([[maybe_unused]] const id_t      &cluster_edge_id,
+         std::vector<edge_id_with_dist_t> &edges,
          const cluster_id_t &cluster_id, auto edge_endpoints_array_ptr,
          auto point_to_cluster_id_map_ptr) {
         for (const edge_id_with_dist_t &edge : edges) {
@@ -1816,8 +1828,8 @@ void assign_points_cluster_ids(
         ygm::ygm_ptr<ygm::container::map<
             supernode_t,
             std::pair<std::map<id_t, full_cluster_info>, full_chain_info>>>
-                           chain_map_ptr,
-        const supernode_t &chain_name,
+                                            chain_map_ptr,
+        [[maybe_unused]] const supernode_t &chain_name,
         std::pair<std::map<id_t, full_cluster_info>, full_chain_info> &chain,
         const id_t &starting_cluster_edge_id, const cluster_id_t &cluster_id,
         ygm::ygm_ptr<ygm::container::map<supernode_t, full_leaf_cluster_info>>
@@ -1954,23 +1966,119 @@ void assign_points_cluster_ids(
     root_chain_cluster_map.for_all(label_root_chain_cluster_lambda);
 
     // Also handle labeling the second root chain child
-    if (root_chain_second_child_name.second == 1) {
-      leaf_cluster_map.async_visit(root_chain_second_child_name,
-                                   label_leaf_cluster_edge_endpoints_lambda,
-                                   selected_root_chain_cluster_id,
-                                   edge_endpoints_array_ptr,
-                                   point_to_cluster_id_map_ptr);
-    } else {
-      chain_map.async_visit(
-          root_chain_second_child_name, label_points_functor(),
-          std::numeric_limits<id_t>::max(), selected_root_chain_cluster_id,
-          leaf_cluster_map_ptr, edge_endpoints_array_ptr,
-          point_to_cluster_id_map_ptr);
+    if (comm.rank() == 0) {
+      if (root_chain_second_child_name.second == 1) {
+        leaf_cluster_map.async_visit(root_chain_second_child_name,
+                                     label_leaf_cluster_edge_endpoints_lambda,
+                                     selected_root_chain_cluster_id,
+                                     edge_endpoints_array_ptr,
+                                     point_to_cluster_id_map_ptr);
+      } else {
+        chain_map.async_visit(
+            root_chain_second_child_name, label_points_functor(),
+            std::numeric_limits<id_t>::max(), selected_root_chain_cluster_id,
+            leaf_cluster_map_ptr, edge_endpoints_array_ptr,
+            point_to_cluster_id_map_ptr);
+      }
     }
   }
   comm.barrier();
+}
 
-  return;
+/**
+ * @brief Writes cluster labels to text files, writing one file per rank.
+ * Files are in the form point_id \t cluster_label in each row.
+ *
+ * @param point_to_cluster_id_map YGM map of point id -> cluster label.
+ * @param output_path File to write cluster data to. Each rank must
+ * receive its own file name (e.g., path_to_cluster_labels/rank.txt).
+ */
+void write_cluster_labels_one_txt_file_per_rank(
+    ygm::container::map<id_t, cluster_id_t> &point_to_cluster_id_map,
+    std::filesystem::path                    output_path) {
+  ygm::comm &comm = point_to_cluster_id_map.comm();
+
+  int num_files = comm.size();
+  if (comm.rank() == 0) {
+    std::filesystem::create_directories(output_path);
+  }
+  comm.barrier();
+
+  // Output points and cluster labels
+  std::string           label_file_name = std::to_string(comm.rank()) + ".txt";
+  std::filesystem::path label_file_path = output_path / label_file_name;
+  std::ofstream         label_ofs(label_file_path);
+  if (!label_ofs.is_open()) {
+    std::cout << "Error! Unable to open label file: "
+              << label_file_path.string() << std::endl;
+  }
+
+  label_ofs << "# point_id\tcluster_id\n";
+  for (const auto &[point_id, cluster_id] : point_to_cluster_id_map) {
+    label_ofs << point_id << "\t" << cluster_id << "\n";
+  }
+  label_ofs.flush();
+  label_ofs.close();
+  comm.barrier();
+}
+
+/**
+ * @brief Writes cluster labels a single-rank Metall datastore. Labels
+ * are saved as a vector of pairs (point_id, cluster_label).
+ *
+ * @param point_to_cluster_id_map YGM map of point id -> cluster label.
+ * @param output_path Path (as a string) to output Metall datastore.
+ */
+void write_cluster_labels_single_pm(
+    ygm::container::map<id_t, cluster_id_t> &point_to_cluster_id_map,
+    const std::string                       &output_path) {
+  ygm::comm &comm = point_to_cluster_id_map.comm();
+
+  // Get local point ids and cluster labels
+  std::vector<id_t>         point_ids;
+  std::vector<cluster_id_t> cluster_labels;
+  point_ids.reserve(point_to_cluster_id_map.local_size());
+  cluster_labels.reserve(point_to_cluster_id_map.local_size());
+
+  for (const auto &[id, label] : point_to_cluster_id_map) {
+    point_ids.push_back(id);
+    cluster_labels.push_back(label);
+  }
+
+  const size_t num_points = point_to_cluster_id_map.size();
+
+  MPI_Comm mpi_comm = comm.get_mpi_comm();
+
+  if (comm.rank() == 0) {
+    metall::manager manager(metall::create_only, output_path);
+    auto cluster_id_table = manager.construct<pm_point_to_cluster_id_t>(
+        metall::unique_instance)(manager.get_allocator());
+    cluster_id_table->reserve(num_points);
+
+    // Write own edges
+    for (size_t i = 0; i < point_ids.size(); ++i) {
+      // cluster_id_table->emplace(point_ids.at(i), cluster_labels.at(i));
+      cluster_id_table->emplace_back(
+          std::make_pair(point_ids.at(i), cluster_labels.at(i)));
+    }
+
+    // Write edges for all other ranks
+    for (int r = 1; r < comm.size(); ++r) {
+      std::vector<id_t> remote_ids =
+          comm.mpi_recv<std::vector<id_t>>(r, 0, mpi_comm);
+      std::vector<cluster_id_t> remote_labels =
+          comm.mpi_recv<std::vector<cluster_id_t>>(r, 1, mpi_comm);
+      for (size_t i = 0; i < remote_ids.size(); ++i) {
+        cluster_id_table->emplace_back(
+            std::make_pair(remote_ids.at(i), remote_labels.at(i)));
+      }
+    }
+
+  } else {
+    comm.mpi_send(point_ids, 0, 0, mpi_comm);
+    comm.mpi_send(cluster_labels, 0, 1, mpi_comm);
+  }
+  comm.barrier();
 }
 
 /**

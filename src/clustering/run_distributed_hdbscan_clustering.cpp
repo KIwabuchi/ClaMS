@@ -35,13 +35,14 @@
 
 using namespace clams::clustering;
 
-uint32_t LOCAL_COPY_NUM_SUPERNODES_THRESHOLD = 25000;
+uint32_t HDBSCAN_LOCAL_COPY_NUM_SUPERNODES_THRESHOLD = 25000;
 
 struct option {
   std::filesystem::path mst_edges_path;
   uint32_t              min_cluster_size{2};
   std::filesystem::path cluster_ids_out_path;
   std::filesystem::path cluster_data_out_path;
+  bool                  write_metall_output{false};
   bool                  metall_mst{false};
   bool                  verbose{false};
   bool                  read_mst_with_edge_ids{false};
@@ -53,14 +54,17 @@ void show_help() {
       << "<<Usage>>\n"
          "Required arguments:\n"
          "  -i <path> Path to a file or a directory that contains input MST. \n"
-         "  -o <path> Path to clustering output directory. One text file with "
-         "lines of the form <point id><cluster id> will be written per rank. "
-         "The filenames will be of the form rank.txt.\n"
+         "  -o <path> Path to clustering output directory or file. By default, "
+         "one text file with lines of the form <point id><cluster id> will be "
+         "written per rank. The filenames will be of the form rank.txt. Use "
+         "the -s flag to write a Metall datastore instead.\n"
          "  -m <int>  Min cluster size parameter in HDBSCAN.\n"
          "Optional arguments:\n"
          "  -M If specified, input MST is Metall datastore.\n"
          "  -e If specified, read MST file with edge ids included. This option "
          "only works for text file MST input, not Metall input.\n"
+         "  -s If specified, write cluster labels to a single Metall "
+         "datastore located at the provided -o path.\n"
          "  -c <path> Path to detailed clustering data output directory. One "
          "csv file will be written per rank.\n"
          "  -v Verbose printout.\n"
@@ -77,7 +81,7 @@ std::pair<bool, std::vector<int>> parse_option(int argc, char *argv[],
   bool             show_help = false;
   std::vector<int> unknown_opts;
   int              opt_char;
-  while ((opt_char = getopt(argc, argv, "i:o:m:c:n:Mevh")) != -1) {
+  while ((opt_char = getopt(argc, argv, "i:o:m:c:Msevh")) != -1) {
     switch (opt_char) {
       case 'i':
         opt.mst_edges_path = std::filesystem::path(optarg);
@@ -96,6 +100,9 @@ std::pair<bool, std::vector<int>> parse_option(int argc, char *argv[],
         break;
       case 'e':
         opt.read_mst_with_edge_ids = true;
+        break;
+      case 's':
+        opt.write_metall_output = true;
         break;
       case 'v':
         opt.verbose = true;
@@ -158,11 +165,12 @@ int main(int argc, char *argv[]) {
   spdlog::stopwatch sw_step;
 
   // Phase 1 times
-  float incidence_map_time  = 0.0;
-  float contract_edges_time = 0.0;
-  float get_components_time = 0.0;
-  float update_parent_time  = 0.0;
-  float update_edges_time   = 0.0;
+  float init_min_incident_edge_time = 0.0;
+  float min_incident_edge_time      = 0.0;
+  float contract_edges_time         = 0.0;
+  float get_components_time         = 0.0;
+  float update_parent_time          = 0.0;
+  float update_edges_time           = 0.0;
 
   // Phase 2 times
   float assign_edges_to_chains_time              = 0.0;
@@ -245,7 +253,6 @@ int main(int argc, char *argv[]) {
             distance_t        dist;
             ss >> edge_id >> node1 >> node2 >> dist;
             ++local_num_edges_read;
-
           } catch (...) {
             std::cout << "Error reading mst line: " << line << std::endl;
           }
@@ -302,8 +309,8 @@ int main(int argc, char *argv[]) {
 
   id_t total_num_edges_read = ygm::sum(local_num_edges_read, world);
 
-  // Initialize edge map of basic endpoints
-  // and edge contraction map with edge_contraction_info
+  // Initialize edge array of basic endpoints
+  // and edge contraction array with edge_contraction_info
   ygm::container::array<std::pair<id_t, id_t>> edge_endpoints_array(
       world, total_num_edges_read);
   ygm::container::array<edge_contraction_info> edge_contraction_array(
@@ -405,7 +412,12 @@ int main(int argc, char *argv[]) {
     sw_step.reset();
     fill_init_min_incident_edge_map(min_incident_edge_map,
                                     edge_endpoints_array);
-    incidence_map_time += sw_step.elapsed().count();
+    init_min_incident_edge_time += sw_step.elapsed().count();
+    if (opt.verbose && world.rank() == 0) {
+      spdlog::info(
+          "  Time to initialize and fill min incident edge map (s): {:.3f}",
+          sw_step);
+    }
 
     // Max possible number of contraction rounds is log2(number of edges in
     // MST)
@@ -423,8 +435,10 @@ int main(int argc, char *argv[]) {
 
       // Find all edges to contract and add to disjoint set
       sw_step.reset();
+      id_t num_nodes_at_start_of_round;
       contract_edges(round, min_incident_edge_map, edge_contraction_array,
                      alpha_edge_map_ptr, tree_components_djset);
+      num_nodes_at_start_of_round = min_incident_edge_map.size();
 
       // Count how many edges were contracted this round
       id_t num_edges_contracted = 0;
@@ -440,11 +454,10 @@ int main(int argc, char *argv[]) {
       contract_edges_time += sw_step.elapsed().count();
       sw_step.reset();
 
-      // Update the succ dendrogram parents for edges that were contracted
       // before this round
       if (round >= 2) {
         if (min_incident_edge_map.size() <=
-            LOCAL_COPY_NUM_SUPERNODES_THRESHOLD) {
+            HDBSCAN_LOCAL_COPY_NUM_SUPERNODES_THRESHOLD) {
           update_edge_chain_parent_edge_id_from_local_map(
               round, edge_contraction_array, min_incident_edge_map);
         } else {
@@ -459,7 +472,6 @@ int main(int argc, char *argv[]) {
 
       // clear the min incident edge map since we're done with it for this
       // round
-      id_t num_nodes_at_start_of_round = min_incident_edge_map.size();
       min_incident_edge_map.clear();
       world.barrier();
 
@@ -506,7 +518,7 @@ int main(int argc, char *argv[]) {
       // we have few enough new supernodes, create a local copy of
       // tree_components_djset to update edge info
       if (tree_components_djset.num_sets() <=
-          LOCAL_COPY_NUM_SUPERNODES_THRESHOLD) {
+          HDBSCAN_LOCAL_COPY_NUM_SUPERNODES_THRESHOLD) {
         update_edge_endpoints_and_chain_supernode_from_local_map(
             round, edge_contraction_array, tree_components_djset);
       }
@@ -527,7 +539,7 @@ int main(int argc, char *argv[]) {
       // Update the incidence map
       update_min_incident_edge_map(edge_contraction_array,
                                    min_incident_edge_map);
-      incidence_map_time += sw_step.elapsed().count();
+      min_incident_edge_time += sw_step.elapsed().count();
 
       ++round;
 
@@ -544,8 +556,14 @@ int main(int argc, char *argv[]) {
     spdlog::info(" Time for this phase (s): {:.3f}", sw_phase);
     if (opt.verbose) {
       spdlog::info(" Phase 1 time breakdown:");
-      spdlog::info("   Time to fill incidence map (s): {:.3f}",
-                   incidence_map_time);
+      spdlog::info(
+          "   Time to fill initial min incident edge map from provided "
+          "spanning tree edges (s): {:.3f}",
+          init_min_incident_edge_time);
+      spdlog::info(
+          "   Time to fill min incident edge map after contractions (s): "
+          "{:.3f}",
+          min_incident_edge_time);
       spdlog::info("   Time to contract edges (s): {:.3f}",
                    contract_edges_time);
       spdlog::info(
@@ -675,7 +693,6 @@ int main(int argc, char *argv[]) {
       sw_step.reset();
       fill_missing_leaf_cluster_info(leaf_cluster_map, alpha_edge_map);
       fill_missing_non_root_chain_cluster_info(chain_map, alpha_edge_map);
-
       fill_initial_cluster_info_time += sw_step.elapsed().count();
 
       // Erase alpha edges from the map if they are not in the root chain
@@ -774,7 +791,7 @@ int main(int argc, char *argv[]) {
       // root chain clusters by their alpha edge id in phase 3
       full_root_chain_cluster_array.for_all(
           [&root_chain_cluster_map](
-              const id_t                                     &index,
+              [[maybe_unused]] const id_t                    &index,
               const std::pair<id_t, root_chain_cluster_info> &value) {
             root_chain_cluster_map.async_insert(value.first, value.second);
           });
@@ -1014,8 +1031,7 @@ int main(int argc, char *argv[]) {
       {
         local_possible_clusters_for_selection =
             calculate_root_chain_size_stability(root_chain_array,
-                                                root_chain_second_child, world,
-                                                root_chain_supernode);
+                                                root_chain_second_child, world);
 
         // Update the cluster map with new root chain info
         update_root_chain_cluster_info(root_chain_array,
@@ -1228,36 +1244,30 @@ int main(int argc, char *argv[]) {
   {
     sw_step.reset();
 
+    if (opt.write_metall_output) {
+      if (world.rank() == 0) {
+        spdlog::info("Writing cluster labels to Metall datastore at: {}",
+                     opt.cluster_ids_out_path.string());
+      }
+      write_cluster_labels_single_pm(point_to_cluster_id_map,
+                                     opt.cluster_ids_out_path.string());
+    } else {
+      int num_files = world.size();
+      if (world.rank() == 0) {
+        spdlog::info("Writing {} files containing cluster labels to: {}",
+                     num_files, opt.cluster_ids_out_path.string());
+      }
+      write_cluster_labels_one_txt_file_per_rank(point_to_cluster_id_map,
+                                                 opt.cluster_ids_out_path);
+    }
+
     id_t num_points_clustered = 0;
-
-    int num_files = world.size();
-    if (world.rank() == 0) {
-      spdlog::info("Writing {} files containing cluster labels to: {}",
-                   num_files, opt.cluster_ids_out_path.string());
-      std::filesystem::create_directories(opt.cluster_ids_out_path);
-    }
-    world.barrier();
-
-    // Output points and cluster labels
-    std::string label_file_name = std::to_string(world.rank()) + ".txt";
-    std::filesystem::path label_file_path =
-        opt.cluster_ids_out_path / label_file_name;
-    std::ofstream label_ofs(label_file_path);
-    if (!label_ofs.is_open()) {
-      spdlog::warn("Unable to open label file: {}", label_file_path.string());
-    }
-
-    label_ofs << "# point_id\tcluster_id\n";
     for (const auto &[point_id, cluster_id] : point_to_cluster_id_map) {
-      label_ofs << point_id << "\t" << cluster_id << "\n";
       if (cluster_id >= 0) {
         ++num_points_clustered;
       }
     }
-    label_ofs.flush();
-    label_ofs.close();
     world.barrier();
-
     id_t total_num_points_clustered = ygm::sum(num_points_clustered, world);
     if (world.rank() == 0) {
       spdlog::info("Number of points clustered: {}",

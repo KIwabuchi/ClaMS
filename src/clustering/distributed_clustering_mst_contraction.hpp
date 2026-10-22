@@ -20,6 +20,8 @@
 
 namespace clams::clustering {
 
+uint32_t HDBSCAN_LOCAL_CACHE_SIZE_LIMIT = 100000;
+
 /**
  * @brief Sort and process MST edges.
  *
@@ -78,27 +80,17 @@ void sort_and_process_mst_edges_into_maps(
 void fill_init_min_incident_edge_map(
     ygm::container::map<id_t, id_t>              &min_incident_edge_map,
     ygm::container::array<std::pair<id_t, id_t>> &edge_endpoints_array) {
-  ygm::comm &comm = min_incident_edge_map.comm();
+  ygm::comm &comm = edge_endpoints_array.comm();
 
   static auto check_incident_edge_lambda =
       []([[maybe_unused]] const id_t &supernode_rep, id_t &min_incident_edge_id,
          const id_t &edge_id) {
         if (edge_id < min_incident_edge_id) {
           min_incident_edge_id = edge_id;
+        } else if (min_incident_edge_id == 0) {
+          min_incident_edge_id = edge_id;
         }
       };
-
-  // Fill the initial incidence map from the original MST edges
-  auto fill_init_min_incident_edge_map_supernode_reps =
-      [&min_incident_edge_map]([[maybe_unused]] const id_t &edge_id,
-                               std::pair<id_t, id_t>       &edge_endpoints) {
-        min_incident_edge_map.async_insert(edge_endpoints.first,
-                                           std::numeric_limits<id_t>::max());
-        min_incident_edge_map.async_insert(edge_endpoints.second,
-                                           std::numeric_limits<id_t>::max());
-      };
-  edge_endpoints_array.for_all(fill_init_min_incident_edge_map_supernode_reps);
-  comm.barrier();
 
   // Fill the initial incidence map from the original MST edges
   auto fill_init_min_incident_edge_map =
@@ -110,6 +102,13 @@ void fill_init_min_incident_edge_map(
                                           check_incident_edge_lambda, edge_id);
       };
   edge_endpoints_array.for_all(fill_init_min_incident_edge_map);
+  comm.barrier();
+
+  // Since map values initialize to 0, set the two endpoints of edge 0 to have
+  // min incident edge 0 at the end
+  if (comm.rank() == 0) {
+    edge_endpoints_array.async_visit(0, fill_init_min_incident_edge_map);
+  }
   comm.barrier();
 }
 
@@ -127,8 +126,9 @@ void fill_init_min_incident_edge_map(
  * @param tree_components_djset YGM disjoint_set for getting connected
  * components after edge contraction.
  */
+template <typename ygm_container_type>
 void contract_edges(
-    uint32_t _round, ygm::container::map<id_t, id_t> &min_incident_edge_map,
+    uint32_t _round, ygm_container_type &min_incident_edge_map,
     ygm::container::array<edge_contraction_info> &edge_contraction_array,
     ygm::ygm_ptr<ygm::container::map<id_t, alpha_edge_info>> alpha_edge_map_ptr,
     ygm::container::disjoint_set<id_t> &tree_components_djset) {
@@ -148,38 +148,34 @@ void contract_edges(
         }
       };
 
-  auto contract_edges_lambda = [&edge_contraction_array, alpha_edge_map_ptr,
-                                tree_components_djset_ptr](
-                                   [[maybe_unused]] const id_t &supernode_rep,
-                                   const id_t min_incident_edge_id) {
-    // The shortest edge incident to each supernode is contracted
+  auto contract_edges_lambda =
+      [&edge_contraction_array, alpha_edge_map_ptr, tree_components_djset_ptr](
+          const id_t &supernode_rep, const id_t &min_incident_edge_id) {
+        // The shortest edge incident to each supernode is contracted
 
-    // Add the contracted edge to the disjoint set and set as
-    // contracted For an edge between supernodes (rep1, round-1) and
-    // (rep2, round-1), we add the rep1-rep2 edge to the disjoint set
-    auto add_edge_to_djset_lambda = []([[maybe_unused]] const id_t &edge_id,
-                                       edge_contraction_info       &edge_info,
-                                       auto tree_components_djset_ptr) {
-      edge_info.contraction_round = round;
-      tree_components_djset_ptr->async_union(
-          edge_info.endpoint_supernode_reps.first,
-          edge_info.endpoint_supernode_reps.second);
-    };
-    edge_contraction_array.async_visit(min_incident_edge_id,
-                                       add_edge_to_djset_lambda,
-                                       tree_components_djset_ptr);
-
-    // Set this supernode as the dendrogram child of the min incident edge
-    if (round >= 2) {
-      alpha_edge_map_ptr->async_visit(min_incident_edge_id,
-                                      add_dendrogram_child_lambda,
-                                      std::make_pair(supernode_rep, round - 1));
-    }
-  };
+        // Add the contracted edge to the disjoint set and set as
+        // contracted For an edge between supernodes (rep1, round-1) and
+        // (rep2, round-1), we add the rep1-rep2 edge to the disjoint set
+        auto add_edge_to_djset_lambda = []([[maybe_unused]] const id_t &edge_id,
+                                           edge_contraction_info &edge_info,
+                                           auto tree_components_djset_ptr) {
+          edge_info.contraction_round = round;
+          tree_components_djset_ptr->async_union(
+              edge_info.endpoint_supernode_reps.first,
+              edge_info.endpoint_supernode_reps.second);
+        };
+        edge_contraction_array.async_visit(min_incident_edge_id,
+                                           add_edge_to_djset_lambda,
+                                           tree_components_djset_ptr);
+        // Set this supernode as the dendrogram child of the min incident edge
+        if (round >= 2) {
+          alpha_edge_map_ptr->async_visit(
+              min_incident_edge_id, add_dendrogram_child_lambda,
+              std::make_pair(supernode_rep, round - 1));
+        }
+      };
   min_incident_edge_map.for_all(contract_edges_lambda);
   comm.barrier();
-
-  return;
 }
 
 /**
@@ -200,46 +196,136 @@ void update_edge_chain_parent_edge_id(
   ygm::comm &comm                       = edge_contraction_array.comm();
   auto       edge_contraction_array_ptr = edge_contraction_array.get_ygm_ptr();
 
-  auto update_chain_parents_lambda =
-      [&min_incident_edge_map, round, edge_contraction_array_ptr](
-          const id_t &edge_id, edge_contraction_info &edge_info) {
-        // Only see if we can update an edge's chain parent edge id if not
-        // assigned yet (if its 0) and if the edge is already contracted
-        if (edge_info.chain_parent_edge_id == 0 &&
-            0 < edge_info.contraction_round &&
-            edge_info.contraction_round < round) {
+  static std::unordered_map<id_t, id_t> local_min_incident_edge_map;
+  local_min_incident_edge_map.clear();
+
+  static std::unordered_set<id_t> supernode_reps_with_visit_sent;
+  supernode_reps_with_visit_sent.clear();
+  static std::unordered_map<id_t, std::vector<id_t>>
+      map_of_edges_awaiting_visit_return;
+  map_of_edges_awaiting_visit_return.clear();
+
+  auto update_chain_parents_lambda = [&min_incident_edge_map, round,
+                                      edge_contraction_array_ptr](
+                                         const id_t            &edge_id,
+                                         edge_contraction_info &edge_info) {
+    // Only see if we can update an edge's chain parent edge id if not
+    // assigned yet (if its 0) and if the edge is already contracted
+    if (edge_info.chain_parent_edge_id == 0 &&
+        0 < edge_info.contraction_round &&
+        edge_info.contraction_round < round) {
+      // If we already have the min incident edge id stored locally, then
+      // directly try to update the chain parent
+      if (local_min_incident_edge_map.find(edge_info.chain_supernode.first) !=
+          local_min_incident_edge_map.end()) {
+        id_t min_incident_edge_id =
+            local_min_incident_edge_map.at(edge_info.chain_supernode.first);
+        if (min_incident_edge_id > edge_id) {
+          edge_info.chain_parent_edge_id = min_incident_edge_id;
+        }
+      } else {
+        // If we already sent out an async visit call for this chain
+        // supernode, then add this edge to the local map and await the
+        // returned info to update it later
+        if (supernode_reps_with_visit_sent.find(
+                edge_info.chain_supernode.first) !=
+            supernode_reps_with_visit_sent.end()) {
+          map_of_edges_awaiting_visit_return[edge_info.chain_supernode.first]
+              .push_back(edge_id);
+        }
+        // Do an async visit to min incident edge map the first time we
+        // encounter this chain supernode locally
+        else {
+          supernode_reps_with_visit_sent.insert(
+              edge_info.chain_supernode.first);
           min_incident_edge_map.async_visit(
               edge_info.chain_supernode.first,
               []([[maybe_unused]] const id_t &supernode_rep,
                  const id_t &min_incident_edge_id, const id_t &edge_id,
                  auto edge_contraction_array_ptr) {
-                // If the supernode's min incident edge id is larger than edge
-                // id, we found the chain's parent edge id in the dendrogram
-                if (min_incident_edge_id > edge_id) {
-                  edge_contraction_array_ptr->async_visit(
-                      edge_id,
-                      []([[maybe_unused]] const id_t &edge_id,
-                         edge_contraction_info       &edge_info,
-                         id_t                         chain_parent_edge_id) {
-                        edge_info.chain_parent_edge_id = chain_parent_edge_id;
-                      },
-                      min_incident_edge_id);
-                }
+                // If the supernode's min incident edge id is larger than
+                // edge id, we found the chain's parent edge id in the
+                // dendrogram
+                edge_contraction_array_ptr->async_visit(
+                    edge_id,
+                    []([[maybe_unused]] const id_t &edge_id,
+                       edge_contraction_info       &edge_info,
+                       id_t min_incident_edge_id, id_t supernode_rep) {
+                      if (min_incident_edge_id > edge_id) {
+                        edge_info.chain_parent_edge_id = min_incident_edge_id;
+                      }
+
+                      if (local_min_incident_edge_map.size() <
+                          HDBSCAN_LOCAL_CACHE_SIZE_LIMIT) {
+                        local_min_incident_edge_map[supernode_rep] =
+                            min_incident_edge_id;
+                      }
+                    },
+                    min_incident_edge_id, supernode_rep);
               },
               edge_id, edge_contraction_array_ptr);
         }
-      };
+      }
+    }
+  };
   edge_contraction_array.for_all(update_chain_parents_lambda);
   comm.barrier();
 
-  return;
+  // Go through the edges awaiting return messages and update them. If we
+  // didn't get a return message and stored value, then do the required
+  // async visits
+  for (auto &[supernode_rep, edge_id_vector] :
+       map_of_edges_awaiting_visit_return) {
+    // If we already have the min incident edge id stored locally, then
+    // directly try to update the chain parents
+    if (local_min_incident_edge_map.find(supernode_rep) !=
+        local_min_incident_edge_map.end()) {
+      id_t min_incident_edge_id = local_min_incident_edge_map.at(supernode_rep);
+      for (id_t edge_id : edge_id_vector) {
+        if (min_incident_edge_id > edge_id) {
+          edge_contraction_array.local_visit(
+              edge_id,
+              []([[maybe_unused]] const id_t &edge_id,
+                 edge_contraction_info &edge_info, id_t chain_parent_edge_id) {
+                edge_info.chain_parent_edge_id = chain_parent_edge_id;
+              },
+              min_incident_edge_id);
+        }
+      }
+    } else {
+      for (id_t &edge_id : edge_id_vector) {
+        // Do an async visit to min incident edge map
+        min_incident_edge_map.async_visit(
+            supernode_rep,
+            []([[maybe_unused]] const id_t &supernode_rep,
+               const id_t &min_incident_edge_id, const id_t &edge_id,
+               auto edge_contraction_array_ptr) {
+              // If the supernode's min incident edge id is larger than
+              // edge id, we found the chain's parent edge id in the
+              // dendrogram
+              if (min_incident_edge_id > edge_id) {
+                edge_contraction_array_ptr->async_visit(
+                    edge_id,
+                    []([[maybe_unused]] const id_t &edge_id,
+                       edge_contraction_info       &edge_info,
+                       id_t chain_parent_edge_id, id_t supernode_rep) {
+                      edge_info.chain_parent_edge_id = chain_parent_edge_id;
+                    },
+                    min_incident_edge_id, supernode_rep);
+              }
+            },
+            edge_id, edge_contraction_array_ptr);
+      }
+    }
+  }
+  comm.barrier();
 }
 
 /**
- * @brief Updates the edge contraction map by updating the chain parent edge id
- * of contracted edges e by looking up the current supernode they are in and
- * seeing if the supernode's min incident edge has larger id than e. Makes a
- * local copy of the YGM min_incident_edge_map on each rank to avoid
+ * @brief Updates the edge contraction map by updating the chain parent edge
+ * id of contracted edges e by looking up the current supernode they are in
+ * and seeing if the supernode's min incident edge has larger id than e. Makes
+ * a local copy of the YGM min_incident_edge_map on each rank to avoid
  * bottlenecks. This version should be used instead of
  * update_edge_chain_parent_edge_id when the min_incident_edge_map is small.
  *
@@ -255,7 +341,7 @@ void update_edge_chain_parent_edge_id_from_local_map(
   ygm::comm &comm = edge_contraction_array.comm();
 
   // Give all ranks a full copy of min_incident_edge_map
-  std::map<id_t, id_t> local_min_incident_edge_map;
+  std::unordered_map<id_t, id_t> local_min_incident_edge_map;
   min_incident_edge_map.for_all(
       [&local_min_incident_edge_map](const id_t &supernode_rep,
                                      const id_t &min_incident_edge_id) {
@@ -263,10 +349,10 @@ void update_edge_chain_parent_edge_id_from_local_map(
       });
   comm.barrier();
 
-  static std::map<id_t, id_t> min_incident_edge_std_map;
+  static std::unordered_map<id_t, id_t> min_incident_edge_std_map;
   min_incident_edge_std_map.clear();
   comm.async_bcast(
-      [](const std::map<id_t, id_t> &local_map) {
+      [](const std::unordered_map<id_t, id_t> &local_map) {
         min_incident_edge_std_map.insert(local_map.begin(), local_map.end());
       },
       local_min_incident_edge_map);
@@ -291,20 +377,18 @@ void update_edge_chain_parent_edge_id_from_local_map(
   };
   edge_contraction_array.for_all(update_chain_parents_lambda);
   comm.barrier();
-
-  return;
 }
 
 /**
- * @brief Updates edge_contraction_array by updating the supernode endpoints of
- * uncontracted edges and updates the current chain supernode of contracted
+ * @brief Updates edge_contraction_array by updating the supernode endpoints
+ * of uncontracted edges and updates the current chain supernode of contracted
  * edges if the chain parent edge id is not yet found. This version directly
  * visits the tree_conmponents_djset.
  *
  * @param _round The round of MST contraction we're on.
  * @param edge_contraction_array YGM array of edge id -> edge_contraction_info
- * @param tree_components_djset YGM disjoint_set of connected components of the
- * contracted tree. We use this to get the new supernode reps.
+ * @param tree_components_djset YGM disjoint_set of connected components of
+ * the contracted tree. We use this to get the new supernode reps.
  */
 void update_edge_endpoints_and_chain_supernode(
     uint32_t                                      _round,
@@ -356,9 +440,9 @@ void update_edge_endpoints_and_chain_supernode(
               edge_id, edge_contraction_array_ptr);
         }
 
-        // If an edge is already contracted, see if it already has a known chain
-        // parent edge id, or if we should update the chain supernode to find
-        // the chain this edge belongs to
+        // If an edge is already contracted, see if it already has a known
+        // chain parent edge id, or if we should update the chain supernode to
+        // find the chain this edge belongs to
         else {
           // If we haven't found a chain_parent_edge_id > edge_id in the
           // dendrogram yet, then update the chain supernode
@@ -394,23 +478,21 @@ void update_edge_endpoints_and_chain_supernode(
   edge_contraction_array.for_all(
       update_edge_endpoints_and_chain_supernode_lambda);
   comm.barrier();
-
-  return;
 }
 
 /**
- * @brief Updates edge_contraction_array by updating the supernode endpoints of
- * uncontracted edges and updates the current chain supernode of contracted
+ * @brief Updates edge_contraction_array by updating the supernode endpoints
+ * of uncontracted edges and updates the current chain supernode of contracted
  * edges if the chain parent edge id is not yet found. Makes a
- * local copy of the tree_components_djset representatives on each rank to avoid
- * bottlenecks. This version should be used instead of
- * update_edge_endpoints_and_chain_supernode when the number of tree components
- * is small.
+ * local copy of the tree_components_djset representatives on each rank to
+ * avoid bottlenecks. This version should be used instead of
+ * update_edge_endpoints_and_chain_supernode when the number of tree
+ * components is small.
  *
  * @param _round The round of MST contraction we're on.
  * @param edge_contraction_array YGM array of edge id -> edge_contraction_info
- * @param tree_components_djset YGM disjoint_set of connected components of the
- * contracted tree. We use this to get the new supernode reps.
+ * @param tree_components_djset YGM disjoint_set of connected components of
+ * the contracted tree. We use this to get the new supernode reps.
  */
 void update_edge_endpoints_and_chain_supernode_from_local_map(
     uint32_t                                      round,
@@ -418,8 +500,8 @@ void update_edge_endpoints_and_chain_supernode_from_local_map(
     ygm::container::disjoint_set<id_t>           &tree_components_djset) {
   ygm::comm &comm = edge_contraction_array.comm();
 
-  static std::map<id_t, id_t> old_to_new_supernode_rep_map;
-  static std::map<id_t, id_t> local_old_to_new_supernode_rep_map;
+  static std::unordered_map<id_t, id_t> old_to_new_supernode_rep_map;
+  static std::unordered_map<id_t, id_t> local_old_to_new_supernode_rep_map;
   old_to_new_supernode_rep_map.clear();
   local_old_to_new_supernode_rep_map.clear();
 
@@ -429,8 +511,9 @@ void update_edge_endpoints_and_chain_supernode_from_local_map(
     local_old_to_new_supernode_rep_map[old_supernode_rep] = new_supernode_rep;
   });
   comm.barrier();
+
   comm.async_bcast(
-      [](const std::map<id_t, id_t> &local_map) {
+      [](const std::unordered_map<id_t, id_t> &local_map) {
         old_to_new_supernode_rep_map.insert(local_map.begin(), local_map.end());
       },
       local_old_to_new_supernode_rep_map);
@@ -453,9 +536,9 @@ void update_edge_endpoints_and_chain_supernode_from_local_map(
               old_to_new_supernode_rep_map.at(
                   edge_info.endpoint_supernode_reps.second);
         }
-        // If an edge is already contracted, see if it already has a known chain
-        // parent edge id, or if we should update the chain supernode to find
-        // the chain this edge belongs to
+        // If an edge is already contracted, see if it already has a known
+        // chain parent edge id, or if we should update the chain supernode to
+        // find the chain this edge belongs to
         else {
           // If we haven't found a chain_parent_edge_id > edge_id in the
           // dendrogram yet, then update the chain supernode
@@ -478,8 +561,6 @@ void update_edge_endpoints_and_chain_supernode_from_local_map(
   edge_contraction_array.for_all(
       update_edge_endpoints_and_chain_supernode_lambda);
   comm.barrier();
-
-  return;
 }
 
 /**
@@ -488,8 +569,8 @@ void update_edge_endpoints_and_chain_supernode_from_local_map(
  *
  * @param min_incident_edge_map YGM map of supernode representative ->
  * min incident edge id. We will clear and refill this map.
- * @param tree_components_djset YGM disjoint_set of connected components of the
- * contracted tree. We use this to get the new supernode reps.
+ * @param tree_components_djset YGM disjoint_set of connected components of
+ * the contracted tree. We use this to get the new supernode reps.
  */
 void reinit_min_incident_edge_map(
     ygm::container::map<id_t, id_t>    &min_incident_edge_map,
@@ -507,8 +588,6 @@ void reinit_min_incident_edge_map(
       };
   tree_components_djset.for_all(reinit_min_incident_edge_map_lambda);
   comm.barrier();
-
-  return;
 }
 
 /**
@@ -519,8 +598,8 @@ void reinit_min_incident_edge_map(
  * @param edge_contraction_array YGM map of edge id -> edge contraction info.
  * Assumes that edges already have their supernode endpoints updated.
  * @param min_incident_edge_map YGM map of supernode representative ->
- * min incident edge id. Assumes that the map already has the correct supernode
- * reps as keys.
+ * min incident edge id. Assumes that the map already has the correct
+ * supernode reps as keys.
  */
 void update_min_incident_edge_map(
     ygm::container::array<edge_contraction_info> &edge_contraction_array,

@@ -11,15 +11,20 @@ from script.utilities import *
 
 # Modified from:
 # https://gist.github.com/lmcinnes/24ed5c22c80125be5133811d677eae7b
+
+
 def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points=False, ignore_true_noise_points=False):
-    print(f"Assigning singleton clusters to noise points: {singleton_cluster_to_noise_points}")
-    print(f"Ignore true noise points in the ground truth: {ignore_true_noise_points}")
+    print(
+        f"Assigning singleton clusters to noise points: {singleton_cluster_to_noise_points}")
+    print(
+        f"Ignore true noise points in the ground truth: {ignore_true_noise_points}")
     max_cluster_id = max(np.max(cluster_labels), np.max(true_labels))
 
     if np.any(true_labels < 0):
         print("Ground truth labels contain noise points")
         pct_clustered_gt = (np.sum(true_labels >= 0) / cluster_labels.shape[0])
-        print(f"Ground truth cluster coverage (%): {pct_clustered_gt * 100:.2f}%")
+        print(
+            f"Ground truth cluster coverage (%): {pct_clustered_gt * 100:.2f}%")
 
         if ignore_true_noise_points:
             print("Remove noise points in the ground truth from the evaluation")
@@ -33,7 +38,7 @@ def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points
     non_noise_points_mask = (cluster_labels >= 0)
     num_non_noise_points = np.sum(non_noise_points_mask)
     pct_clustered = (num_non_noise_points / cluster_labels.shape[0])
-    print(f"Cluster coverage (%): {pct_clustered * 100:.2f}%")
+    print(f"Cluster coverage (%): {pct_clustered * 100:.2f}")
 
     # Make sure always num_non_noise_points <= cluster_labels.shape[0]
     assert num_non_noise_points <= cluster_labels.shape[0]
@@ -42,15 +47,16 @@ def eval_clusters(cluster_labels, true_labels, singleton_cluster_to_noise_points
         if singleton_cluster_to_noise_points:
             print(
                 "Assigning a singleton cluster to each noise point in the clustering result")
-            cluster_labels = assign_singleton_cluster_to_noise_points(cluster_labels, max_cluster_id)
+            cluster_labels = assign_singleton_cluster_to_noise_points(
+                cluster_labels, max_cluster_id)
             ari = adjusted_rand_score(true_labels, cluster_labels)
             ami = adjusted_mutual_info_score(true_labels, cluster_labels)
         else:
             print("Noise points are ignored in the evaluation")
             ari = adjusted_rand_score(true_labels[non_noise_points_mask],
-                                    cluster_labels[non_noise_points_mask])
+                                      cluster_labels[non_noise_points_mask])
             ami = adjusted_mutual_info_score(true_labels[non_noise_points_mask],
-                                            cluster_labels[non_noise_points_mask])
+                                             cluster_labels[non_noise_points_mask])
             # sil = silhouette_score(raw_data[non_noise_points_mask], cluster_labels[non_noise_points_mask])
     else:
         print(f"No noise points in the clustering result")

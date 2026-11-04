@@ -17,3 +17,8 @@ setup_ygm_target(run_distributed_hdbscan_clustering)
 setup_omp_target(run_distributed_hdbscan_clustering)
 setup_metall_target(run_distributed_hdbscan_clustering)
 setup_spdlog_target(run_distributed_hdbscan_clustering)
+
+add_basic_executable(serialize_pm_cluster_data serialize_pm_cluster_data.cpp)
+setup_omp_target(serialize_pm_cluster_data)
+setup_metall_target(serialize_pm_cluster_data)
+setup_spdlog_target(serialize_pm_cluster_data)

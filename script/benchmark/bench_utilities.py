@@ -1,15 +1,7 @@
 # Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
 # Project Developers. See the top-level COPYRIGHT file for details.
 
-from script.utilities import *
-import subprocess
 import os
-import sys
-from pathlib import Path
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def set_up_batch_header(script_file, job_name, job_dir, num_nodes):
@@ -44,15 +36,13 @@ def add_cmd(command, script_file, echo=True,
         script_file.write("fi\n\n")
 
 
-def add_msg(msg, script_file, echo=True):
-    if echo:
-        script_file.write(f"echo \"{msg}\"\n")
-    script_file.write(f"{msg}\n")
+def add_msg(msg, script_file):
+    script_file.write(f"echo \"{msg}\"\n")
 
 
-def add_parameter_msg(parameter, value, script_file, echo=True):
+def add_parameter_msg(parameter, value, script_file):
     msg = f"Parameter {parameter}: {value}"
-    add_msg(msg, script_file, echo)
+    add_msg(msg, script_file)
 
 
 def add_srun_cmd(num_tasks_per_node, command, script_file, echo=True,

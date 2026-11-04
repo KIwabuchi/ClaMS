@@ -25,8 +25,7 @@ namespace clams::clustering {
 
 // Type for writing cluster labels to metal file as a vector of (point id,
 // cluster label) pairs
-using pm_point_to_cluster_id_t =
-    metall::container::vector<std::pair<id_t, cluster_id_t>>;
+using pm_point_to_cluster_id_t = clams::pm_point_to_cluster_id_list_t;
 
 /**
  * @brief Calculate cluster size, stability, and stability traversing up
@@ -2052,7 +2051,7 @@ void write_cluster_labels_single_pm(
   if (comm.rank() == 0) {
     metall::manager manager(metall::create_only, output_path);
     auto cluster_id_table = manager.construct<pm_point_to_cluster_id_t>(
-        metall::unique_instance)(manager.get_allocator());
+        "point_to_cluster_id_list")(manager.get_allocator());
     cluster_id_table->reserve(num_points);
 
     // Write own edges

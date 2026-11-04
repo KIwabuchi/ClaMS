@@ -9,30 +9,29 @@ Usage example:
     # Assuming we are in the 'build' directory and have already built the source code
 
     # Install the third-party libraries, if needed
-    python3 ../script/setup/install_tpl.py
+    python3 -m script.install_tpls
 
     # Generate the shell script
-    python3 ../script/benchmark/run_clams_bench.py -p point_features.txt -g ground_truth_labels.txt -w /path/to/parallel/filesystem/
+    python3 -m script.benchmark.run_clams_bench -p point_features.txt -g ground_truth_labels.txt -w /path/to/parallel/filesystem/
 
 To use YGM-based calculation of clustering metrics, add -y flag:
     # The ground_truth_labels_with_point_ids.txt file needs to have each row in the form
     # "point_id label" (with white-space separator)
-    python ../script/run_clams_bench.py -p point_features.txt -g ground_truth_labels_with_point_ids.txt -y
+    python3 -m script.benchmark.run_clams_bench -p point_features.txt -g ground_truth_labels_with_point_ids.txt -y
 
 """
-
 import os
 import sys
 import argparse
+import shlex
 import time
-import pathlib
 from datetime import datetime
 
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+if __name__ == '__main__' and not __package__:
+    os.execv(sys.executable, [sys.executable, '-m',
+                              'script.benchmark.run_clams_bench', *sys.argv[1:]])
 
-from bench_utilities import add_cmd, add_msg, add_srun_cmd, set_up_batch_header, add_parameter_msg
+from script.benchmark.bench_utilities import add_cmd, add_msg, add_srun_cmd, set_up_batch_header, add_parameter_msg
 from script.utilities import create_dir, parse_float_list, parse_range
 
 
@@ -146,14 +145,17 @@ def parse_options():
                         default=f'{cwd}/src/clustering/run_distributed_hdbscan_clustering',
                         help='Path to the HPC clustering executable.')
     parser.add_argument('-E', '--python_evaluator',
-                        default=f'{cwd}/script/benchmark/evaluate_clustering_quality.py',
-                        help='Path to the Python clustering evaluation script.')
+                        default='-m script.benchmark.evaluate_clustering_quality',
+                        help='Python evaluator module or script path.')
     parser.add_argument('-Y', '--ygm_evaluator_exe',
                         default=f'{cwd}/tpls/clams-cc/build/src/clustering_metrics',
                         help='Path to the YGM clustering evaluation executable.')
     parser.add_argument('--noise_point_clustering_exe',
                         default=f'{cwd}/src/clustering/cluster_noise_points',
                         help='Path to the noise point assigner executable.')
+    parser.add_argument('--serialize_pm_cluster_data_exe',
+                        default=f'{cwd}/src/clustering/serialize_pm_cluster_data',
+                        help='Path to the PM cluster data serialization executable.')
     parser.add_argument('--pm_datastore_copy_exe',
                         default=f'{cwd}/src/tools/copy_pm_datastore',
                         help='Path to the PM datastore copy executable.')
@@ -224,7 +226,8 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
                    verbose, ground_truth_path,
                    singleton_cluster_to_noise_points,
                    noise_point_clustering_exe,
-                   cluster_noise_points):
+                   cluster_noise_points,
+                   serialize_pm_cluster_data_exe):
     # Set the min cluster size environment variable for this run
     add_cmd(set_cmd, job_script, False, False)
 
@@ -236,25 +239,34 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
     hpc_clustering_command = (f"{clustering_exe} {verbose_flag} -i {amst_ds_path} -M "
                               f" -m ${{MIN_CLUSTER_SIZE}} "
                               f" -o {cluster_label_dir} "
-                              f" -c {cluster_tree_dir}")
+                              f" -c {cluster_tree_dir} "
+                              f" -s ")
     add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
     finish_stage(job_script)
 
     if cluster_noise_points:
         start_stage(job_script, "Noise-Points-Clustering")
         no_noise_points_cluster_label_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}_no_noise.txt"
-        cluster_assign_command = (f"{noise_point_clustering_exe} -M "
-                                  f"-m {amst_ds_path} "
-                                  f"-c {cluster_label_dir} "
+        cluster_assign_command = (f"{noise_point_clustering_exe} "
+                                  f"-M -m {amst_ds_path} "
+                                  f"-C -c {cluster_label_dir} "
                                   f"-o {no_noise_points_cluster_label_file}")
         add_cmd(cluster_assign_command, job_script)
         finish_stage(job_script)
 
     if ground_truth_path:
         start_stage(job_script, "Evaluating Clustering Results")
+
+        # Serialize the clustering results for evaluation
+        cluster_label_text_file = f"{work_dir}/cluster_labels_a{amst_approx_bound}_m${{MIN_CLUSTER_SIZE}}.txt"
+        serialize_command = (f"{serialize_pm_cluster_data_exe} "
+                             f"-i {cluster_label_dir} "
+                             f"-o {cluster_label_text_file}")
+        add_cmd(serialize_command, job_script)
+
         job_script.write(f"echo \"MST-based cluster guess: False\"\n")
         add_clustering_evaluation(
-            job_script, cluster_label_dir, amst_ds_path, ground_truth_path,
+            job_script, cluster_label_text_file, amst_ds_path, ground_truth_path,
             evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
             singleton_cluster_to_noise_points)
         finish_stage(job_script)
@@ -295,6 +307,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                            min_samples,
                            noise_point_clustering_exe,
                            cluster_noise_points,
+                           serialize_pm_cluster_data_exe,
                            input_dnnd_ds_path,
                            verbose):
     create_dir(job_dir)
@@ -305,6 +318,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
 
         # Set up the batch script header
         set_up_batch_header(job_script, job_name, job_dir, num_nodes)
+        add_cmd(f'cd {shlex.quote(os.getcwd())}', job_script)
         job_script.write(f"echo \"Compute nodes: {num_nodes}\"\n")
         job_script.write(f"echo \"Tasks per node: {num_tasks_per_node}\"\n")
 
@@ -353,8 +367,9 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             start_stage(
                 job_script, f"AMST, approx bound = {amst_approx_bound}")
             add_msg(f"Approx bound = {amst_approx_bound}",
-                    job_script, echo=True)
-            add_parameter_msg("AMST-ApproxBound", amst_approx_bound, job_script)
+                    job_script)
+            add_parameter_msg("AMST-ApproxBound",
+                              amst_approx_bound, job_script)
             amst_ds_path = f"{work_dir}/amst_pm_datastore_a{amst_approx_bound}"
             amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path} -e {amst_approx_bound}"
             add_srun_cmd(num_tasks_per_node, amst_command, job_script)
@@ -367,7 +382,8 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                     amst_ds_path, clustering_exe,
                     evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
                     ground_truth_path, singleton_cluster_to_noise_points,
-                    noise_point_clustering_exe, cluster_noise_points)
+                    noise_point_clustering_exe, cluster_noise_points,
+                    serialize_pm_cluster_data_exe)
             try_no += 1
 
         finish_stage(job_script)
@@ -447,6 +463,7 @@ def main():
                                         opts.min_samples,
                                         opts.noise_point_clustering_exe,
                                         opts.cluster_noise_points,
+                                        opts.serialize_pm_cluster_data_exe,
                                         opts.input_dnnd_ds_path,
                                         opts.verbose)
     print(f"Generated batch script: {job_script}")

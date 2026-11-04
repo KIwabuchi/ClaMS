@@ -7,18 +7,21 @@ Benchmark  HDBSCAN
 This script is a simple wrapper over the run_hdbscan.py script to benchmark HDBSCAN clustering.
 
 Usage example:
-python3 ../script/run_hdbscan_bench.py -p ../dataset/usps/points.txt -m 10,15,20 -s 8-10 -g ../dataset/usps/labels.txt
+python3 -m script.benchmark.run_hdbscan_bench -p ../dataset/usps/points.txt -m 10,15,20 -s 8-10 -g ../dataset/usps/labels.txt
 """
 
 import argparse
-import hdbscan
 import os
-import numpy as np
+import sys
 import time
 
-from clustering_utilities import *
-from bench_utilities import *
-from script.utilities import *
+if __name__ == '__main__' and not __package__:
+    os.execv(sys.executable, [sys.executable, '-m',
+                              'script.benchmark.run_hdbscan_bench', *sys.argv[1:]])
+
+from script.benchmark.clustering_utilities import eval_clusters
+from script.data_readers import read_cluster_labels, read_points
+from script.utilities import parse_range, show_time_now
 
 def parse_options():
     parser = argparse.ArgumentParser(
@@ -72,7 +75,9 @@ def parse_options():
 
 
 def run_hdbscan_kernel(points, min_cluster_size, min_samples,
-                       gen_min_span_tree=False):
+                      gen_min_span_tree=False):
+    import hdbscan
+
     clusters = hdbscan.HDBSCAN(gen_min_span_tree=gen_min_span_tree,
                                min_cluster_size=min_cluster_size,
                                min_samples=min_samples,

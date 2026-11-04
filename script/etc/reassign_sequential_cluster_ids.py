@@ -24,12 +24,15 @@ Output file example
 --
 """""
 
-import os
 import argparse
-import numpy as np
-from script.benchmark.clustering_utilities import *
-from script.utilities import *
-from script.data_readers import *
+import os
+import sys
+
+if __name__ == '__main__' and not __package__:
+    os.execv(sys.executable, [sys.executable, '-m',
+                              'script.etc.reassign_sequential_cluster_ids', *sys.argv[1:]])
+
+from script.data_readers import read_cluster_labels
 
 def main():
     parser = argparse.ArgumentParser(

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../details/data_types.hpp"
+
 /*
 Hash function for std::pair
 Syntax taken from: https://lists.isocpp.org/std-discussion/2020/12/0937.php
@@ -57,7 +59,7 @@ MPI_Datatype mpi_distance_type() {
 }
 
 // Cluster label type
-using cluster_id_t             = int32_t;
+using cluster_id_t             = clams::cluster_id_t;
 cluster_id_t NOISE_POINT_LABEL = -1;  // cluster label for noise points
 
 // Supernode type - Supernodes are identified by a pair of

@@ -4,10 +4,6 @@
 
 import numpy as np
 from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score
-import datetime
-import os
-import sys
-from script.utilities import *
 
 # Modified from:
 # https://gist.github.com/lmcinnes/24ed5c22c80125be5133811d677eae7b

@@ -138,7 +138,7 @@ if (NOT Metall_FOUND)
     FetchContent_Declare(
             Metall
             GIT_REPOSITORY https://github.com/LLNL/metall.git
-            GIT_TAG master
+            GIT_TAG develop
             SYSTEM)
     FetchContent_MakeAvailable(Metall)
 endif ()

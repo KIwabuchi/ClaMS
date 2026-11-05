@@ -26,8 +26,6 @@
 
 namespace omp = metall::utility::omp;
 
-using cluster_id_table_t = boost::unordered::unordered_flat_map<id_t, id_t>;
-
 // todo:
 // add 'max_k' option (-k): the maximum number of neighbors to consider for
 // correlation analysis.
@@ -96,7 +94,7 @@ int main(int argc, char *argv[]) {
   std::cout << "#of points: " << graph.num_keys() << std::endl;
   std::cout << "#of neighbors: " << graph.num_values() << std::endl;
 
-  cluster_id_table_t cluster_id_table;
+  clams::pm_point_to_cluster_id_map_t cluster_id_table;
   clams::read_cluster_ids(clams::find_files(input_clusters_path),
                           cluster_id_table);
   std::cout << "#of points with clusters: " << cluster_id_table.size()

@@ -35,27 +35,8 @@ import argparse
 import glob
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
-
-
-def resolve_files(paths: Sequence[str]) -> list[Path]:
-    """Resolve file, directory, and glob inputs to a unique sorted file list."""
-    resolved: set[Path] = set()
-    for value in paths:
-        path = Path(value)
-        if path.is_dir():
-            matches = set(path.glob("*.txt")) | set(path.glob("knng-*.txt"))
-        elif path.is_file():
-            matches = {path}
-        else:
-            matches = {Path(match) for match in glob.glob(value)}
-
-        resolved.update(match.resolve() for match in matches if match.is_file())
-
-    if not resolved:
-        raise FileNotFoundError(f"No files matched: {paths}")
-
-    return sorted(resolved)
-
+from script.utilities import find_files_in_dir
+from script.data_readers import read_cluster_labels
 
 def iter_knng_records(path: Path, contains_distance: bool) -> Iterator[tuple[int, list[int]]]:
     """Yield (source_id, neighbor_ids) pairs from one KNNG dump file."""
@@ -79,62 +60,16 @@ def iter_knng_records(path: Path, contains_distance: bool) -> Iterator[tuple[int
 
             yield src_id, neighbor_ids
 
-def read_cluster_labels(cluster_path: str | Path) -> dict[int, int]:
-    """Read cluster labels from a file or directory into a point->cluster map."""
-    labels: dict[int, int] = {}
-    files = resolve_files([str(cluster_path)])
-
-    if not files:
-        raise FileNotFoundError(f"No cluster files found in {cluster_path}")
-
-    # Heuristic: determine whether the file format contains point IDs by scanning
-    # the first non-comment, non-empty line.
-    first_file = files[0]
-    contains_ids = False
-    with first_file.open("r") as handle:
-        for line in handle:
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if len(stripped.split()) >= 2:
-                contains_ids = True
-            break
-
-    for file in files:
-        with file.open("r") as handle:
-            for line in handle:
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-
-                items = stripped.split()
-                if contains_ids:
-                    if len(items) < 2:
-                        raise ValueError(f"{file}: invalid cluster row: {line.rstrip()}")
-                    point_id, cluster_id = int(items[0]), int(items[1])
-                else:
-                    point_id = len(labels)
-                    cluster_id = int(items[0])
-
-                if point_id in labels:
-                    raise ValueError(f"Duplicate point ID {point_id} in cluster file {file}")
-                labels[point_id] = cluster_id
-
-    if not labels:
-        raise ValueError(f"No cluster labels were loaded from {cluster_path}")
-
-    return labels
-
 
 def evaluate_knng_clusters(graph_path: str | Path, cluster_path: str | Path, k: int = 10, no_distance: bool = False):
     """Return per-point and aggregate same-cluster neighbor statistics."""
     if k <= 0:
         raise ValueError("-k/--neighbors must be positive")
 
-    labels = read_cluster_labels(cluster_path)
+    labels = read_cluster_labels(cluster_path, "*")
     print(f"Loaded {len(labels)} cluster labels from {cluster_path}")
 
-    files = resolve_files([str(graph_path)])
+    files = find_files_in_dir([str(graph_path)])
 
     per_point: list[tuple[int, int, int, int, float]] = []
     total_same = 0
@@ -178,36 +113,6 @@ def evaluate_knng_clusters(graph_path: str | Path, cluster_path: str | Path, k: 
         "avg_same_cluster_fraction": avg_ratio,
         "num_clustered_points": len(labels),
     }
-
-
-def _parse_k_values(raw_values: Sequence[Sequence[str]] | None) -> list[int]:
-    """Normalize one or more k values from CLI input (supports repeated or comma-separated lists)."""
-    values: list[int] = []
-    raw_entries = raw_values or []
-
-    for group in raw_entries:
-        if isinstance(group, str):
-            group_tokens = [group]
-        else:
-            group_tokens = list(group)
-
-        for token in group_tokens:
-            for item in str(token).split(","):
-                item = item.strip()
-                if not item:
-                    continue
-                try:
-                    value = int(item)
-                except ValueError as exc:
-                    raise argparse.ArgumentTypeError(f"invalid neighbor count: {item!r}") from exc
-                if value <= 0:
-                    raise argparse.ArgumentTypeError(f"neighbor count must be positive: {value}")
-                values.append(value)
-
-    if not values:
-        return [10]
-    return values
-
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -253,7 +158,7 @@ def _parse_args() -> argparse.Namespace:
         help="Optional output file path for the summary table",
     )
     args = parser.parse_args()
-    args.neighbors = _parse_k_values(args.neighbors or [[10]])
+    args.neighbors = parse_range(args.neighbors or [[10]])
     return args
 
 

@@ -3,10 +3,12 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <random>
+#include <sstream>
 
 // MEMO: some OMP related macros are duplicated in saltatlas and metall
 // Use saltatlas's one if CLAMS_USE_SALTATLAS is defined
@@ -65,14 +67,26 @@ inline void read_edges(const std::filesystem::path &path,
       std::exit(1);
     }
 
-    std::string line;
     while (true) {
-      id_t       src;
-      id_t       dst;
-      distance_t dist;
-      ifs >> src >> dst >> dist;
-      if (ifs.eof()) {
-        break;
+      std::string line_buf;
+      if (!std::getline(ifs, line_buf)) {
+        break;  // End of file
+      }
+
+      // If it starts from '#', skip the line
+      auto first_non_space = line_buf.find_first_not_of(" \t");
+      if (first_non_space == std::string::npos ||
+          line_buf[first_non_space] == '#') {
+        continue;
+      }
+
+      id_t              src;
+      id_t              dst;
+      distance_t        dist;
+      std::stringstream ss(line_buf);
+      if (!(ss >> src >> dst >> dist)) {
+        std::cerr << "Invalid line in file: " << file << std::endl;
+        std::abort();
       }
       edges.emplace_back(src, dst, dist);
     }
@@ -173,11 +187,10 @@ inline void read_knng_edges(
 /// cluster ID, separated by whitespace. Lines whose first character is `#` are
 /// ignored. The output maps each point ID to its cluster ID; if an ID occurs
 /// more than once, the last assignment wins.
-template <typename cluster_id_table_t>
 void read_cluster_ids(const std::vector<std::filesystem::path> &input_paths,
-                      cluster_id_table_t &point_cluster_map) {
-  using id_t         = typename cluster_id_table_t::key_type;
-  using cluster_id_t = typename cluster_id_table_t::mapped_type;
+                      pm_point_to_cluster_id_map_t &point_cluster_map) {
+  using id_t         = clams::id_t;
+  using cluster_id_t = clams::cluster_id_t;
 
   for (const auto &input_path : input_paths) {
     std::ifstream ifs(input_path);

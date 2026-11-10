@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <stack>
 #include <string>
 #include <tuple>
@@ -29,9 +30,6 @@
 
 using namespace clams;
 
-template <typename K, typename V>
-using map_t = boost::unordered::unordered_flat_map<K, V>;
-
 template <typename K>
 using set_t = boost::unordered::unordered_flat_set<K>;
 
@@ -39,6 +37,7 @@ struct option {
   std::filesystem::path mst_edges_path;
   bool                  metall_mst{false};
   std::filesystem::path cluster_ids_input_path;
+  bool                  metall_cluster_ids{false};
   std::filesystem::path cluster_ids_out_path;
 };
 
@@ -50,14 +49,15 @@ void show_help() {
          "  -c <path> path to input cluster IDs.\n"
          "  -o <path> path to output cluster IDs.\n"
          "Optional arguments:\n"
-         "  -M If specified, input is a Metall datastore.\n"
+         "  -M If specified, the MST input is a Metall datastore.\n"
+         "  -C If specified, the cluster IDs input is a Metall datastore.\n"
          "  -h Show help."
       << std::endl;
 }
 
 void parse_option(int argc, char* argv[], option& opt) {
   int opt_char;
-  while ((opt_char = getopt(argc, argv, "m:c:o:Mh")) != -1) {
+  while ((opt_char = getopt(argc, argv, "m:c:o:MCh")) != -1) {
     switch (opt_char) {
       case 'm':
         opt.mst_edges_path = optarg;
@@ -70,6 +70,9 @@ void parse_option(int argc, char* argv[], option& opt) {
         break;
       case 'M':
         opt.metall_mst = true;
+        break;
+      case 'C':
+        opt.metall_cluster_ids = true;
         break;
       case 'h':
         show_help();
@@ -124,9 +127,29 @@ int main(int argc, char* argv[]) {
     return EXIT_SUCCESS;
   }
 
-  map_t<id_t, id_t> point_cluster_map;
-  read_cluster_ids(clams::find_files(opt.cluster_ids_input_path),
-                   point_cluster_map);
+  pm_point_to_cluster_id_map_t point_cluster_map;
+  if (opt.metall_cluster_ids) {
+    spdlog::info("Attaching cluster IDs in Metall datastore");
+    metall::manager metall_manager(metall::open_read_only,
+                                   opt.cluster_ids_input_path);
+    const auto*     input_cluster_id_list =
+        metall_manager
+            .find<pm_point_to_cluster_id_list_t>("point_to_cluster_id_list")
+            .first;
+    if (!input_cluster_id_list) {
+      spdlog::critical("Failed to find cluster IDs in Metall datastore at {}",
+                       opt.cluster_ids_input_path.string());
+      std::abort();
+    }
+    // The datastore is read-only and closes at the end of this scope, so keep
+    // a heap-backed copy for the assignments made below.
+    point_cluster_map.reserve(input_cluster_id_list->size());
+    point_cluster_map.insert(input_cluster_id_list->begin(),
+                             input_cluster_id_list->end());
+  } else {
+    read_cluster_ids(clams::find_files(opt.cluster_ids_input_path),
+                     point_cluster_map);
+  }
   spdlog::info("Read {} points' cluster IDs from {}", point_cluster_map.size(),
                opt.cluster_ids_input_path.string());
 

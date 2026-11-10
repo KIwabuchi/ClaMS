@@ -24,11 +24,15 @@ Output file example
 --
 """""
 
-import os
 import argparse
-import numpy as np
-from script.benchmark.clustering_utilities import *
+import os
+import sys
 
+if __name__ == '__main__' and not __package__:
+    os.execv(sys.executable, [sys.executable, '-m',
+                              'script.etc.reassign_sequential_cluster_ids', *sys.argv[1:]])
+
+from script.data_readers import read_cluster_labels
 
 def main():
     parser = argparse.ArgumentParser(
@@ -43,7 +47,7 @@ def main():
                         help='Path to the output file')
     args = parser.parse_args()
 
-    cluster_ids = read_label_data(args.input_cluster_ids_path)
+    cluster_ids = read_cluster_labels(args.input_cluster_ids_path, "*")
 
     # Make new cluster IDs
     new_ids = dict()

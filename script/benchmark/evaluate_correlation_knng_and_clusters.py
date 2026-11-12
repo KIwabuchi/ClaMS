@@ -35,6 +35,7 @@ import argparse
 import glob
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
+
 from script.utilities import find_files_in_dir
 from script.data_readers import read_cluster_labels
 
@@ -207,4 +208,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

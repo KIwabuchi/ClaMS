@@ -12,3 +12,7 @@ add_basic_executable(evaluate_correlation_knng_and_clusters
 setup_omp_target(evaluate_correlation_knng_and_clusters)
 setup_metall_target(evaluate_correlation_knng_and_clusters)
 setup_spdlog_target(evaluate_correlation_knng_and_clusters)
+
+add_basic_executable(evaluate_clustering_quality_unsupervised
+                     evaluate_clustering_quality_unsupervised.cpp)
+setup_omp_target(evaluate_clustering_quality_unsupervised)

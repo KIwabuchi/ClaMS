@@ -11,13 +11,7 @@ python3 -m script.benchmark.run_hdbscan_bench -p ../dataset/usps/points.txt -m 1
 """
 
 import argparse
-import os
-import sys
 import time
-
-if __name__ == '__main__' and not __package__:
-    os.execv(sys.executable, [sys.executable, '-m',
-                              'script.benchmark.run_hdbscan_bench', *sys.argv[1:]])
 
 from script.benchmark.clustering_utilities import eval_clusters
 from script.data_readers import read_cluster_labels, read_points

@@ -32,19 +32,12 @@ Both File types can also contain comment lines, which must start from #.
 
 """
 
-import sys
-from pathlib import Path
 import numpy as np
 import argparse
-import os
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+from script.data_readers import read_cluster_labels
+from script.benchmark.clustering_utilities import eval_clusters
 
-from script.data_readers import read_cluster_labels, read_knng, read_points
-from clustering_utilities import *
-from script.utilities import *
 
 def parse_options():
     parser = argparse.ArgumentParser(

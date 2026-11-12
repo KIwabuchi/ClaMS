@@ -25,12 +25,6 @@ Output file example
 """""
 
 import argparse
-import os
-import sys
-
-if __name__ == '__main__' and not __package__:
-    os.execv(sys.executable, [sys.executable, '-m',
-                              'script.etc.reassign_sequential_cluster_ids', *sys.argv[1:]])
 
 from script.data_readers import read_cluster_labels
 

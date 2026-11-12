@@ -4,7 +4,7 @@ The script clones and builds a YGM-based partition comparison
 
 Usage:
     # Assuming we are in 'build' directory
-    python ../script/install_tpls.py [-j number_of_jobs] [-d destination]
+    python -m script.install_tpls [-j number_of_jobs] [-d destination]
 """
 
 

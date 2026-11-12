@@ -11,7 +11,10 @@ Input: cluster label file
 """
 
 import argparse
-from script.benchmark.clustering_utilities import *
+
+import numpy as np
+
+from script.data_readers import read_cluster_labels
 
 
 def parse_options():
@@ -30,7 +33,7 @@ def parse_options():
 def main():
     opt = parse_options()
 
-    cluster_labels = load_data(opt.cluster_path)
+    cluster_labels = read_cluster_labels(opt.cluster_path, "*")
 
     cluster_sizes = np.bincount(cluster_labels)
     print(cluster_sizes)

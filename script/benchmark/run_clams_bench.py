@@ -27,10 +27,6 @@ import shlex
 import time
 from datetime import datetime
 
-if __name__ == '__main__' and not __package__:
-    os.execv(sys.executable, [sys.executable, '-m',
-                              'script.benchmark.run_clams_bench', *sys.argv[1:]])
-
 from script.benchmark.bench_utilities import add_cmd, add_msg, add_srun_cmd, set_up_batch_header, add_parameter_msg
 from script.utilities import create_dir, parse_float_list, parse_range
 

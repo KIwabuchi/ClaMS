@@ -6,7 +6,7 @@
 # cd dataset/synthetic
 # # Gnerate synthetic data using the generator
 # cd ../../build
-# sh ../script/run_synthetic_data_bench.sh -m 15 -s 10 -d blobs
+# sh ../script/benchmark/run_synthetic_data_bench.sh -m 15 -s 10 -d blobs
 
 # Must be one of the dataset names in knng-hdbscan/dataset/synthetic
 DATASET="blobs"
@@ -99,7 +99,7 @@ function run_exact_mst() {
 # Ground Truth Clustering Plot
 # -----------------------------------------
 set_cluster_plot_path "gt"
-python3 ../script/plot_cluster_data.py -p ${POINT_FILE} -l ${LABEL_FILE} -o ${CLUSTER_PLOT_PATH}
+python3 -m script.benchmark.plot.plot_cluster_data -p ${POINT_FILE} -l ${LABEL_FILE} -o ${CLUSTER_PLOT_PATH}
 
 # -----------------------------------------
 # Run HDBSCAN
@@ -109,13 +109,13 @@ set_cluster_out_path "hdbscan"
 set_mst_plot_path "hdbscan"
 set_cluster_plot_path "hdbscan"
 
-python3 ../script/run_hdbscan.py -p ${POINT_FILE} -m ${MIN_CLUSTER_SIZE} -s ${MIN_SAMPLES} -o ${CLUSTER_OUT_PATH} -M ${MST_OUT_PATH} -g ${LABEL_FILE}
+python3 -m script.benchmark.run_hdbscan_bench -p ${POINT_FILE} -m ${MIN_CLUSTER_SIZE} -s ${MIN_SAMPLES} -o ${CLUSTER_OUT_PATH} -M ${MST_OUT_PATH} -g ${LABEL_FILE}
 
 # HDBSCAN MST Plot
-python3 ../script/plot_mst.py -p ${POINT_FILE} -m ${MST_OUT_PATH} -o ${MST_PLOT_PATH}
+python3 -m script.benchmark.plot.plot_mst -p ${POINT_FILE} -m ${MST_OUT_PATH} -o ${MST_PLOT_PATH}
 
 # HDBSCAN Clustering Plot
-python3 ../script/plot_cluster_data.py -p ${POINT_FILE} -l ${CLUSTER_OUT_PATH} -o ${CLUSTER_PLOT_PATH}
+python3 -m script.benchmark.plot.plot_cluster_data -p ${POINT_FILE} -l ${CLUSTER_OUT_PATH} -o ${CLUSTER_PLOT_PATH}
 
 
 # -----------------------------------------
@@ -128,14 +128,14 @@ set_cluster_plot_path "clms_hdbscan"
 ./src/run_hdbscan_clustering -i ${MST_OUT_PATH} -m ${MIN_CLUSTER_SIZE} -o ${CLUSTER_OUT_PATH} -P
 
 # HDBSCAN Clustering Plot
-python3 ../script/plot_cluster_data.py -p ${POINT_FILE} -l ${CLUSTER_OUT_PATH} -o ${CLUSTER_PLOT_PATH}
+python3 -m script.benchmark.plot.plot_cluster_data -p ${POINT_FILE} -l ${CLUSTER_OUT_PATH} -o ${CLUSTER_PLOT_PATH}
 
 
 # -----------------------------------------
 # Run KNN HDBSCAN Clustering (clams clustering)
 # -----------------------------------------
 CMSL_BATCH_LOG="${WORK_DIR}/log_clms_batch.txt"
-python3 ../script/run_clams_bench.py -p ${POINT_FILE} -m ${MIN_CLUSTER_SIZE} -k ${MIN_SAMPLES} -g ${LABEL_FILE} -w ${WORK_DIR} -B "$BATCH_OPTIONS" | tee ${CMSL_BATCH_LOG}
+python3 -m script.benchmark.run_clams_bench -p ${POINT_FILE} -m ${MIN_CLUSTER_SIZE} -s ${MIN_SAMPLES} -g ${LABEL_FILE} -w ${WORK_DIR} -B "$BATCH_OPTIONS" | tee ${CMSL_BATCH_LOG}
 # sleep 30 # Wait for the batch to finish
 
 #out_dir=$(grep "Output directory: ${CMSL_BATCH_LOG}" | awk '{print $3}')
@@ -156,13 +156,13 @@ sed -i '1d' ${CLMS_CLUSTER_PATH}
 set_cluster_out_path "clms"
 cp ${CLMS_CLUSTER_PATH} ${CLUSTER_OUT_PATH}
 set_cluster_plot_path "clms"
-python3 ../script/plot_cluster_data.py -p ${POINT_FILE} -l ${CLUSTER_OUT_PATH} -o ${CLUSTER_PLOT_PATH}
+python3 -m script.benchmark.plot.plot_cluster_data -p ${POINT_FILE} -l ${CLUSTER_OUT_PATH} -o ${CLUSTER_PLOT_PATH}
 
 # AMST Plot
 set_mst_out_path "amst"
 cp ${AMST_FILE} ${MST_OUT_PATH}
 set_mst_plot_path "amst"
-python3 ../script/plot_mst.py -p ${POINT_FILE} -m ${MST_OUT_PATH} -o ${MST_PLOT_PATH}
+python3 -m script.benchmark.plot.plot_mst -p ${POINT_FILE} -m ${MST_OUT_PATH} -o ${MST_PLOT_PATH}
 
 
 # -----------------------------------------
@@ -178,13 +178,13 @@ run_exact_mst ${KNN_DIR} "original_dist"
 # Kruskal MST Plot
 set_mst_out_path "clms_exact_mst"
 cp ${EXACT_MST_FILE} ${MST_OUT_PATH}
-python3 ../script/plot_mst.py -p ${POINT_FILE} -m ${MST_OUT_PATH} -o ${MST_PLOT_PATH}
+python3 -m script.benchmark.plot.plot_mst -p ${POINT_FILE} -m ${MST_OUT_PATH} -o ${MST_PLOT_PATH}
 
 # Run KNN HDBSCAN Clustering with Kruskal MST
 ./src/run_hdbscan_clustering -i ${MST_OUT_PATH} -m ${MIN_CLUSTER_SIZE}  -o ${CLUSTER_OUT_PATH} -P
 
 # KNN HDBSCAN Kruskal-MST Clustering Plot
-python3 ../script/plot_cluster_data.py -p ${POINT_FILE} -l ${CLUSTER_OUT_PATH} -o ${CLUSTER_PLOT_PATH}
+python3 -m script.benchmark.plot.plot_cluster_data -p ${POINT_FILE} -l ${CLUSTER_OUT_PATH} -o ${CLUSTER_PLOT_PATH}
 
 # -----------------------------------------
 # KNN with Mutual Reachability Distance
@@ -197,7 +197,7 @@ run_exact_mst ${MR_DIST_FILE} "mreach_dist"
 set_mst_out_path "clms_mreach_dist"
 cp ${EXACT_MST_FILE} ${MST_OUT_PATH}
 set_mst_plot_path "clms_mreach_dist"
-python3 ../script/plot_mst.py -p ${POINT_FILE} -m ${MST_OUT_PATH} -o ${MST_PLOT_PATH}
+python3 -m script.benchmark.plot.plot_mst -p ${POINT_FILE} -m ${MST_OUT_PATH} -o ${MST_PLOT_PATH}
 
 # Run KNN HDBSCAN Clustering with Mutual Reachability Distance
 set_cluster_out_path "clms_mreach_dist"
@@ -205,4 +205,4 @@ set_cluster_out_path "clms_mreach_dist"
 
 # KNN HDBSCAN Mutual Reachability Distance Clustering Plot
 set_cluster_plot_path "clms_mreach_dist"
-python3 ../script/plot_cluster_data.py -p ${POINT_FILE} -l ${CLUSTER_OUT_PATH} -o ${CLUSTER_PLOT_PATH}
+python3 -m script.benchmark.plot.plot_cluster_data -p ${POINT_FILE} -l ${CLUSTER_OUT_PATH} -o ${CLUSTER_PLOT_PATH}

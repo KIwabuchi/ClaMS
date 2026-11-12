@@ -59,11 +59,11 @@ source ./venv/bin/activate
 # Shows the path to the generated script at the end
 
 ## Without '-y' option, uses Python script for clustering metric evaluation
-python3 ../script/benchmark/run_clams_bench.py -p point_features.txt -g ground_truth_labels.txt -S
+python3 -m script.benchmark.run_clams_bench -p point_features.txt -g ground_truth_labels.txt -S
 
 ## To instead use YGM script for clustering metric evaluation, use '-y' option
 ## In this case, the labels need to be in a file with each row in the form "point_id label"
-python3 ../script/benchmark/run_clams_bench.py -p point_features.txt -g ground_truth_labels_with_point_ids.txt -y -S
+python3 -m script.benchmark.run_clams_bench -p point_features.txt -g ground_truth_labels_with_point_ids.txt -y -S
 
 # To submit a job manually using the generated script
 sbatch /path/to/generated_batch_script.sh
@@ -72,8 +72,13 @@ sbatch /path/to/generated_batch_script.sh
 pushd ../dataset/mnist
 python3 ./download_mnist.py
 popd
-python3 ../script/benchmark/run_clams_bench.py -S -p ../dataset/mnist/points.txt -g ../dataset/mnist/labels.txt
+python3 -m script.benchmark.run_clams_bench -S -p ../dataset/mnist/points.txt -g ../dataset/mnist/labels.txt
 ```
+
+The Python scripts form the `script` package. Run them with `python3 -m`
+from the repository root or from a freshly configured `build/` directory.
+The benchmark generator uses paths relative to `build/` by default.
+Direct script paths also work from those directories.
 
 ## Running HDBSCAN
 
@@ -84,7 +89,7 @@ source ./venv/bin/activate
 # In clams/build
 # -m: min cluster size
 # -s: min samples
-python3 ../script/benchmark/hdbscan_benchmark/run_hdbscan.py -m 10 -s 5 -p ../dataset/fashion-mnist/points.txt -g ../dataset/fashion-mnist/labels.txt
+python3 -m script.benchmark.run_hdbscan_bench -m 10 -s 5 -p ../dataset/fashion-mnist/points.txt -g ../dataset/fashion-mnist/labels.txt
 ```
 
 # License

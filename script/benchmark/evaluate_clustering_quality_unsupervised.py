@@ -15,8 +15,6 @@ denotes noise and is excluded as a source or candidate.
 """
 
 from __future__ import annotations
-from script.utilities import cosine_distance, l1_distance, l2_distance
-from script.data_readers import read_cluster_labels, read_knng, read_points
 
 import argparse
 import csv
@@ -24,16 +22,14 @@ import heapq
 import math
 from collections import deque
 from pathlib import Path
-import sys
 from collections.abc import Callable
 from typing import TypeAlias
 
 import numpy as np
 from numpy.typing import ArrayLike
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+from script.utilities import cosine_distance, l1_distance, l2_distance
+from script.data_readers import read_cluster_labels, read_knng, read_points
 
 
 Graph: TypeAlias = dict[int, list[tuple[int, float | None]]]

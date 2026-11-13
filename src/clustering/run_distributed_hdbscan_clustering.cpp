@@ -28,10 +28,11 @@
 #include <ygm/utility/timer.hpp>
 
 #include "../common.hpp"
-#include "distributed_clustering_build_hierarchy.hpp"
-#include "distributed_clustering_hdbscan.hpp"
-#include "distributed_clustering_mst_contraction.hpp"
-#include "distributed_clustering_types.hpp"
+#include "distributed_clustering/build_hierarchy.hpp"
+#include "distributed_clustering/distributed_clustering_types.hpp"
+#include "distributed_clustering/hdbscan_clustering.hpp"
+#include "distributed_clustering/mst_contraction.hpp"
+#include "distributed_clustering/read_write.hpp"
 
 using namespace clams::clustering;
 
@@ -49,33 +50,41 @@ struct option {
   bool                  output_invalid_clusters_also{false};
 };
 
-void show_help() {
-  std::cout
-      << "<<Usage>>\n"
-         "Required arguments:\n"
-         "  -i <path> Path to a file or a directory that contains input MST. \n"
-         "  -o <path> Path to clustering output directory or file. By default, "
-         "one text file with lines of the form <point id><cluster id> will be "
-         "written per rank. The filenames will be of the form rank.txt. Use "
-         "the -s flag to write a Metall datastore instead.\n"
-         "  -m <int>  Min cluster size parameter in HDBSCAN.\n"
-         "Optional arguments:\n"
-         "  -M If specified, input MST is Metall datastore.\n"
-         "  -e If specified, read MST file with edge ids included. This option "
-         "only works for text file MST input, not Metall input.\n"
-         "  -s If specified, write cluster labels to a single Metall "
-         "datastore located at the provided -o path.\n"
-         "  -c <path> Path to detailed clustering data output directory. One "
-         "csv file will be written per rank.\n"
-         "  -v Verbose printout.\n"
-         "  -h Show help.\n"
-      << std::endl;
+void show_usage(ygm::comm &comm, const char *program_name) {
+  if (comm.rank() == 0) {
+    std::cout
+        << "Usage: " << program_name
+        << " -i <input_mst_path> -m <min_cluster_size> -o "
+           "<output_cluster_label_path> [options]"
+        << std::endl
+        << "Required arguments:" << std::endl
+        << "  -i <path> Path to a file or a directory that contains the "
+           "input MST."
+        << std::endl
+        << "  -m <int>  Min cluster size parameter in HDBSCAN." << std::endl
+        << "  -o <path> Path to clustering output directory or file. By "
+           "default, one text file with lines of the form <point id><cluster "
+           "id> will be written per rank. The filenames will be of the form "
+           "rank.txt. Use the -s flag to write a Metall datastore instead."
+        << std::endl
+        << "Optional arguments:" << std::endl
+        << "  -M If specified, input MST is Metall datastore." << std::endl
+        << "  -e If specified, read MST file with edge ids included. This "
+           "option only works for text file MST input, not Metall input."
+        << std::endl
+        << "  -s If specified, write cluster labels to a single Metall "
+           "datastore located at the provided -o path."
+        << std::endl
+        << "  -c <path> Path to detailed clustering data output directory. One "
+           "csv file will be written per rank."
+        << std::endl
+        << "  -v Verbose printout." << std::endl
+        << "  -h Show help." << std::endl
+        << std::endl;
+  }
 }
 
 // parse option using getopt
-// i: input mst edge list directory
-// o: output directory
-// m: minimum cluster size
 std::pair<bool, std::vector<int>> parse_option(int argc, char *argv[],
                                                option &opt) {
   bool             show_help = false;
@@ -113,7 +122,6 @@ std::pair<bool, std::vector<int>> parse_option(int argc, char *argv[],
       default:
         unknown_opts.push_back(opt_char);
         show_help = true;
-        // std::exit(EXIT_FAILURE);
     }
   }
 
@@ -130,32 +138,29 @@ int main(int argc, char *argv[]) {
 
   option opt;
   auto   parse_return = parse_option(argc, argv, opt);
-  if ((parse_return.first) & (world.rank() == 0)) {
+  if (parse_return.first) {
     if (parse_return.second.size() > 0) {
       for (int opt_char : parse_return.second) {
         spdlog::critical("Ignoring unknown option: {:c}\n", opt_char);
       }
     }
-    show_help();
+    show_usage(world, argv[0]);
   }
 
   if (opt.cluster_ids_out_path.empty()) {
     if (world.rank() == 0) {
       spdlog::info("Error: No output path for cluster labels is provided");
-      show_help();
     }
+    show_usage(world, argv[0]);
     std::exit(EXIT_FAILURE);
   }
 
   // Set the min cluster size as a static variable for easy access
+  int             num_ranks        = world.size();
   static uint32_t min_cluster_size = opt.min_cluster_size;
   if (world.rank() == 0) {
-    spdlog::info("Minimum cluster size: {}", min_cluster_size);
-  }
-
-  int num_ranks = world.size();
-  if (world.rank() == 0) {
     spdlog::info("Number of ranks: {}", num_ranks);
+    spdlog::info("Minimum cluster size: {}", min_cluster_size);
   }
 
   // Timers
@@ -190,49 +195,16 @@ int main(int argc, char *argv[]) {
 
   // Vector to store mst edges read by this rank
   // Edges stored in the form (distance, endpoint pair (node 1, node2))
-  static std::vector<std::pair<distance_t, std::pair<id_t, id_t>>>
-              mst_edge_vector;
-  static id_t local_num_edges_read;
-  local_num_edges_read = 0;
+  std::vector<std::pair<distance_t, std::pair<id_t, id_t>>> mst_edge_vector;
+  id_t local_num_edges_read = 0;
 
   if (opt.metall_mst) {
     if (world.rank() == 0) {
-      spdlog::info("Attaching MST in Metall datastore");
+      spdlog::info("Reading distributed PM MST data from: {}",
+                   opt.mst_edges_path.string());
     }
-    metall::manager metall_manager(metall::open_read_only, opt.mst_edges_path);
-    auto           *input_mst_edges =
-        metall_manager
-            .find<clams::weighted_edge_list_t>(metall::unique_instance)
-            .first;
-    if (world.rank() == 0) {
-      if (!input_mst_edges) {
-        spdlog::critical("Failed to find MST edges in Metall datastore at {}",
-                         opt.mst_edges_path.string());
-        std::abort();
-      }
-      spdlog::info("Copying MST edges from Metall datastore");
-    }
-
-    uint64_t num_edges  = (*input_mst_edges).size();
-    uint64_t chunk_size = num_edges / world.size() + 1;
-    uint64_t start_idx  = chunk_size * world.rank();
-    uint64_t end_idx =
-        std::min(chunk_size * (world.rank() + 1) - 1, num_edges - 1);
-
-    mst_edge_vector.clear();
-    for (uint64_t i = start_idx; i <= end_idx; ++i) {
-      std::pair<distance_t, std::pair<id_t, id_t>> array_item =
-          std::make_pair((*input_mst_edges)[i].distance,
-                         std::make_pair((*input_mst_edges)[i].ids[0],
-                                        (*input_mst_edges)[i].ids[1]));
-      mst_edge_vector.push_back(array_item);
-    }
+    mst_edge_vector      = read_pm_mst(opt.mst_edges_path, world);
     local_num_edges_read = mst_edge_vector.size();
-
-    if ((world.rank() == 0) & (opt.verbose)) {
-      spdlog::info("  Time to read edges (s): {:.3f}", sw_step);
-    }
-
   } else {
     if (opt.read_mst_with_edge_ids) {
       if (world.rank() == 0) {
@@ -240,68 +212,21 @@ int main(int argc, char *argv[]) {
             "Reading MST edges from file with edge IDs already assigned");
         spdlog::info("Reading edges from: {}", opt.mst_edges_path.string());
       }
-
       std::vector<std::string> input_paths{opt.mst_edges_path.c_str()};
-      ygm::io::line_parser     mst_line_parser(world, input_paths);
-
-      auto line_parser_lambda = [](const std::string &line) {
-        if (std::isdigit(line[0])) {
-          try {
-            std::stringstream ss(line);
-            id_t              edge_id;
-            id_t              node1, node2;
-            distance_t        dist;
-            ss >> edge_id >> node1 >> node2 >> dist;
-            ++local_num_edges_read;
-          } catch (...) {
-            std::cout << "Error reading mst line: " << line << std::endl;
-          }
-        } else {
-          if (line[0] != '#') {
-            std::cout << "Read comment line in mst file: " << line << std::endl;
-          }
-        }
-      };
-      mst_line_parser.for_all(line_parser_lambda);
-      world.barrier();
-
+      local_num_edges_read =
+          read_num_mst_edges_from_text_file(input_paths, world);
     } else {
       if (world.rank() == 0) {
         spdlog::info("Reading MST edges from file and sorting to assign IDs");
         spdlog::info("Reading edges from: {}", opt.mst_edges_path.string());
       }
-
       std::vector<std::string> input_paths{opt.mst_edges_path.c_str()};
-      ygm::io::line_parser     mst_line_parser(world, input_paths);
-
-      mst_edge_vector.clear();
-
-      auto line_parser_lambda = [](const std::string &line) {
-        if (std::isdigit(line[0])) {
-          try {
-            std::stringstream ss(line);
-            id_t              node1, node2;
-            distance_t        dist;
-            ss >> node1 >> node2 >> dist;
-            std::pair<distance_t, std::pair<id_t, id_t>> array_item =
-                std::make_pair(dist, std::make_pair(node1, node2));
-            mst_edge_vector.push_back(array_item);
-          } catch (...) {
-            std::cout << "Error reading mst line: " << line << std::endl;
-          }
-        } else {
-          std::cout << "Read comment line in mst file: " << line << std::endl;
-        }
-      };
-      mst_line_parser.for_all(line_parser_lambda);
-      world.barrier();
-
+      mst_edge_vector      = read_mst_from_text_file(input_paths, world);
       local_num_edges_read = mst_edge_vector.size();
-
-      if ((world.rank() == 0) & (opt.verbose)) {
-        spdlog::info("  Time to read edges (s): {:.3f}", sw_step);
-      }
     }
+  }
+  if ((world.rank() == 0) & (opt.verbose)) {
+    spdlog::info("  Time to read edges (s): {:.3f}", sw_step);
   }
 
   // Sort and ingest MST edges
@@ -321,38 +246,8 @@ int main(int argc, char *argv[]) {
     // the YGM arrays
     if (opt.read_mst_with_edge_ids) {
       std::vector<std::string> input_paths{opt.mst_edges_path.c_str()};
-      ygm::io::line_parser     mst_line_parser(world, input_paths);
-
-      auto line_parser_lambda = [&edge_endpoints_array,
-                                 &edge_contraction_array](
-                                    const std::string &line) {
-        if (std::isdigit(line[0])) {
-          try {
-            std::stringstream ss(line);
-            id_t              edge_id;
-            id_t              node1, node2;
-            distance_t        dist;
-            ss >> edge_id >> node1 >> node2 >> dist;
-            ++local_num_edges_read;
-            std::pair<id_t, id_t> edge_endpoints = std::make_pair(node1, node2);
-            edge_endpoints_array.async_insert(edge_id, edge_endpoints);
-            edge_contraction_array.async_insert(
-                edge_id,
-                edge_contraction_info{.endpoint_supernode_reps = edge_endpoints,
-                                      .distance                = dist});
-
-          } catch (...) {
-            std::cout << "Error reading mst line: " << line << std::endl;
-          }
-        } else {
-          if (line[0] != '#') {
-            std::cout << "Read comment line in mst file: " << line << std::endl;
-          }
-        }
-      };
-      mst_line_parser.for_all(line_parser_lambda);
-      world.barrier();
-
+      read_mst_edges_with_id_from_text_file(input_paths, edge_endpoints_array,
+                                            edge_contraction_array);
     }
     // Sort the MST edges and add them to our edge arrays
     else {
@@ -376,7 +271,7 @@ int main(int argc, char *argv[]) {
   if (edge_endpoints_array.size() == 0) {
     if (world.rank() == 0) {
       spdlog::info("Error: 0 MST edges read");
-      show_help();
+      show_usage(world, argv[0]);
     }
     std::exit(EXIT_FAILURE);
   }
@@ -397,10 +292,6 @@ int main(int argc, char *argv[]) {
 
   static uint32_t final_round;
   {
-    // // Supernode map of supernode old supernode rep -> new supernode rep
-    // // This copies over the ygm disjoint set information for accessibility
-    // ygm::container::map<id_t, id_t> supernode_rep_map(world);
-
     // Incidence map of supernode rep (we know the round, so we drop it) ->
     // vector of all incident edge ids
     ygm::container::map<id_t, id_t> min_incident_edge_map(world);
@@ -551,31 +442,33 @@ int main(int argc, char *argv[]) {
 
     min_incident_edge_map.clear();
     tree_components_djset.clear();
-  }  // End phase 1
-  if (world.rank() == 0) {
-    spdlog::info(" Time for this phase (s): {:.3f}", sw_phase);
-    if (opt.verbose) {
-      spdlog::info(" Phase 1 time breakdown:");
-      spdlog::info(
-          "   Time to fill initial min incident edge map from provided "
-          "spanning tree edges (s): {:.3f}",
-          init_min_incident_edge_time);
-      spdlog::info(
-          "   Time to fill min incident edge map after contractions (s): "
-          "{:.3f}",
-          min_incident_edge_time);
-      spdlog::info("   Time to contract edges (s): {:.3f}",
-                   contract_edges_time);
-      spdlog::info(
-          "   Time to get new supernode connected components (s): {:.3f}",
-          get_components_time);
-      spdlog::info("   Time to update chain parents when possible (s): {:.3f}",
-                   update_parent_time);
-      spdlog::info(
-          "   Time to update edge endpoints, chain supernode (s): {:.3f}",
-          update_edges_time);
+
+    if (world.rank() == 0) {
+      spdlog::info(" Time for this phase (s): {:.3f}", sw_phase);
+      if (opt.verbose) {
+        spdlog::info(" Phase 1 time breakdown:");
+        spdlog::info(
+            "   Time to fill initial min incident edge map from provided "
+            "spanning tree edges (s): {:.3f}",
+            init_min_incident_edge_time);
+        spdlog::info(
+            "   Time to fill min incident edge map after contractions (s): "
+            "{:.3f}",
+            min_incident_edge_time);
+        spdlog::info("   Time to contract edges (s): {:.3f}",
+                     contract_edges_time);
+        spdlog::info(
+            "   Time to get new supernode connected components (s): {:.3f}",
+            get_components_time);
+        spdlog::info(
+            "   Time to update chain parents when possible (s): {:.3f}",
+            update_parent_time);
+        spdlog::info(
+            "   Time to update edge endpoints, chain supernode (s): {:.3f}",
+            update_edges_time);
+      }
     }
-  }
+  }  // End phase 1
 
   /* Phase 2: Expand dendrogram and get cluster hierarchy */
   if (world.rank() == 0) {

@@ -23,52 +23,6 @@ namespace clams::clustering {
 uint32_t HDBSCAN_LOCAL_CACHE_SIZE_LIMIT = 100000;
 
 /**
- * @brief Sort and process MST edges.
- *
- * @param mst_edge_vector Vector of MST edges (distance, (endpoint1,
- * endpoint2)). Each rank has its own vector of edges and edges should not be
- * duplicated between ranks.
- * @param edge_endpoints_array A YGM array of edge id -> (edge_endpoint1,
- * edge_endpoint2). This array is not filled with values yet, but needs to have
- * size equal to the number of edges when intialized.
- * @param edge_contraction_array An YGM array of edge id ->
- * edge_contraction_info. This array is not filled with values yet, but needs to
- * have size equal to the number of edges when intialized.
- */
-void sort_and_process_mst_edges_into_maps(
-    std::vector<std::pair<distance_t, std::pair<id_t, id_t>>> &mst_edge_vector,
-    ygm::container::array<std::pair<id_t, id_t>> &edge_endpoints_array,
-    ygm::container::array<edge_contraction_info> &edge_contraction_array) {
-  ygm::comm &comm = edge_endpoints_array.comm();
-
-  // Create a YGM array with the MST edges
-  ygm::container::array<std::pair<distance_t, std::pair<id_t, id_t>>>
-      edge_array(comm, mst_edge_vector);
-  comm.barrier();
-
-  // Sort the edges
-  edge_array.sort();
-  comm.barrier();
-
-  // Fill in the edge endpoints and contraction map
-  auto visit_sorted_array_lambda =
-      [&edge_endpoints_array, &edge_contraction_array](
-          const std::size_t                                  &index,
-          const std::pair<distance_t, std::pair<id_t, id_t>> &value) {
-        // Add this edge to the edge map with its sorted position as its id
-        distance_t            distance       = value.first;
-        std::pair<id_t, id_t> edge_endpoints = value.second;
-        edge_endpoints_array.local_insert(index, edge_endpoints);
-        edge_contraction_array.local_insert(
-            index,
-            edge_contraction_info{.endpoint_supernode_reps = edge_endpoints,
-                                  .distance                = distance});
-      };
-  edge_array.for_all(visit_sorted_array_lambda);
-  comm.barrier();
-}
-
-/**
  * @brief Fill the initial min_incident_edge_map from the edge_endpoints_array
  *
  * @param edge_endpoints_array YGM array of edge id -> (edge_endpoint1,

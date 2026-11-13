@@ -10,18 +10,21 @@
 #include <iostream>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include <metall/container/unordered_node_map.hpp>
 #include <metall/container/vector.hpp>
 #include <metall/utility/hash.hpp>
 #include <metall/utility/metall_mpi_adaptor.hpp>
+#include <metall/utility/metall_mpi_datastore.hpp>
 #include <metall/utility/mpi.hpp>
 #include <saltatlas/common/detail/neighbor.hpp>
 #include <saltatlas/dnnd/feature_vector.hpp>
 
 namespace clams {
-/// \brief Holds local point store and k-NN graph that are allocated by
-/// Metall.
+/// \brief Distributed PM k-NN graph that manages local point store and k-NN
+/// graph using Metall. This class does not distribute points across processes;
+/// it only manages the local portion of the graph.
 template <typename Id       = uint64_t,
           typename Point    = saltatlas::pm_feature_vector<float>,
           typename Distance = float, typename IdHash = std::hash<Id>>
@@ -96,6 +99,47 @@ class dist_pm_knng {
     return partitioner_hasher{}(id) % comm_size;
   }
 
+  /// \brief Get the local datastore paths.
+  static std::vector<std::filesystem::path> get_local_datastore_paths(
+      const std::filesystem::path &datastore_path, const MPI_Comm comm) {
+    // Get the number of partitions in the old datastore
+    const int n_partitions = metall::utility::metall_mpi_adaptor::partitions(
+        datastore_path.c_str(), comm);
+    const auto root_path =
+        metall::utility::mpi_datastore::make_root_dir_path(datastore_path);
+
+    std::vector<std::filesystem::path> paths;
+    for (int r = 0; r < n_partitions; ++r) {
+      const auto local_path =
+          metall::utility::mpi_datastore::make_local_dir_path(root_path, r);
+      paths.push_back(local_path);
+    }
+    return paths;
+  }
+
+  /// \brief Find the point store in the given metall manager.
+  /// \param manager The metall manager to search in.
+  /// \return A pointer to the point store, or nullptr if not found.
+  /// \note This function alway return a poninter to a non-const object
+  /// regardless of the open mode of the metall manager. It is the caller's
+  /// responsibility to ensure that the found object is used appropriately.
+  static point_store_type *find_point_store(const metall::manager &manager) {
+    auto *pstore =
+        manager.find<point_store_type>(metall::unique_instance).first;
+    return pstore;
+  }
+
+  /// \brief Find the k-NN graph in the given metall manager.
+  /// \param manager The metall manager to search in.
+  /// \return A pointer to the k-NN graph, or nullptr if not found.
+  /// \note This function alway return a poninter to a non-const object
+  /// regardless of the open mode of the metall manager. It is the caller's
+  /// responsibility to ensure that the found object is used appropriately.
+  static knng_type *find_knng(const metall::manager &manager) {
+    auto *knng = manager.find<knng_type>(metall::unique_instance).first;
+    return knng;
+  }
+
   explicit dist_pm_knng(const MPI_Comm comm) : m_comm(comm) {}
 
   ~dist_pm_knng() noexcept = default;
@@ -117,8 +161,8 @@ class dist_pm_knng {
     m_metall = std::make_unique<metall::utility::metall_mpi_adaptor>(
         metall::open_only, datastore_path.string(), m_comm);
     auto &localm = m_metall->get_local_manager();
-    m_pstore     = localm.find<point_store_type>(metall::unique_instance).first;
-    m_knng       = localm.find<knng_type>(metall::unique_instance).first;
+    m_pstore     = find_point_store(localm);
+    m_knng       = find_knng(localm);
     if (!m_pstore || !m_knng) {
       if (metall::utility::mpi::comm_rank(m_comm) == 0) {
         std::cerr << "Failed to open distributed PM kNNG datastore at "
@@ -136,8 +180,8 @@ class dist_pm_knng {
     m_metall = std::make_unique<metall::utility::metall_mpi_adaptor>(
         metall::open_read_only, datastore_path.string(), m_comm);
     auto &localm = m_metall->get_local_manager();
-    m_pstore     = localm.find<point_store_type>(metall::unique_instance).first;
-    m_knng       = localm.find<knng_type>(metall::unique_instance).first;
+    m_pstore     = find_point_store(localm);
+    m_knng       = find_knng(localm);
     if (!m_pstore || !m_knng) {
       if (metall::utility::mpi::comm_rank(m_comm) == 0) {
         std::cerr << "Failed to open distributed PM kNNG datastore at "
@@ -168,4 +212,5 @@ class dist_pm_knng {
   point_store_type                                    *m_pstore{nullptr};
   knng_type                                           *m_knng{nullptr};
 };
+
 }  // namespace clams

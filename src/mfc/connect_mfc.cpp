@@ -33,8 +33,9 @@ void show_usage(const char *prog_name) {
             << std::endl;
   std::cout << "  -f <string>: Distance function name (e.g., l2, cosine)."
             << std::endl;
-  std::cout << "  -b <path>: (Optional) File to dump the bridge edges."
-            << std::endl;
+  std::cout
+      << "  -b <path>: (Optional) PM datastore path to dump the bridge edges."
+      << std::endl;
 }
 
 bool parse_option(int argc, char *argv[],
@@ -78,8 +79,21 @@ bool parse_option(int argc, char *argv[],
   return true;
 }
 
+template <typename point_t>
+const std::pair<int, int> get_new_owner(const point_t &point,
+                                        const int      original_comm_size,
+                                        const int      new_comm_size) {
+  const int original_owner =
+      cls::dist_pm_knng_t::get_owner(point, original_comm_size);
+  const int new_owner   = original_owner % new_comm_size;
+  const int local_index = original_owner / new_comm_size;
+  return {new_owner, local_index};
+}
+
 int main(int argc, char **argv) {
-  ygm::comm comm(&argc, &argv);
+  ygm::comm        comm(&argc, &argv);
+  static const int comm_size = comm.size();
+  static const int comm_rank = comm.rank();
 
   std::filesystem::path pm_knng_datastore_path;
   std::string           distance_name;
@@ -98,28 +112,47 @@ int main(int argc, char **argv) {
 
   ygm::utility::timer root_timer;
   {
-    cls::dist_pm_knng_t pm_knng(comm.get_mpi_comm());
-    pm_knng.open(pm_knng_datastore_path);
+    const auto local_paths = cls::dist_pm_knng_t::get_local_datastore_paths(
+        pm_knng_datastore_path, comm.get_mpi_comm());
 
-    static auto &knng   = pm_knng.get_knng();
-    static auto &pstore = pm_knng.get_point_store();
-
-    comm.cout0() << "Opened" << std::endl;
+    std::vector<metall::manager> local_managers;
+    for (std::size_t r = 0; r < local_paths.size(); ++r) {
+      if (r % comm_size == comm_rank) {
+        if (!metall::manager::consistent(local_paths[r])) {
+          comm.cerr() << "Inconsistent local managers at rank " << comm_rank
+                      << std::endl;
+          MPI_Abort(comm.get_mpi_comm(), EXIT_FAILURE);
+        }
+        local_managers.emplace_back(metall::open_read_only, local_paths[r]);
+        if (!local_managers.back().check_sanity()) {
+          comm.cerr() << "Failed to open local manager at rank " << comm_rank
+                      << std::endl;
+          MPI_Abort(comm.get_mpi_comm(), EXIT_FAILURE);
+        }
+      }
+    }
+    comm.cout0() << "Opened PM datastores" << std::endl;
     std::cout.flush();
 
     ygm::utility::timer cc_timer;
 
     ygm::container::disjoint_set<cls::id_t> disjoint_set(comm);
-    for (const auto &[source, neighbors] : knng) {
-      for (const auto &neighbor : neighbors) {
-        disjoint_set.async_union(source, neighbor.id);
+    for (auto &local_manager : local_managers) {
+      auto *knng = cls::dist_pm_knng_t::find_knng(local_manager);
+      if (!knng) {
+        comm.cerr() << "Failed to find kNNG" << std::endl;
+        MPI_Abort(comm.get_mpi_comm(), EXIT_FAILURE);
+      }
+
+      for (const auto &[source, neighbors] : *knng) {
+        for (const auto &neighbor : neighbors) {
+          disjoint_set.async_union(source, neighbor.id);
+        }
       }
     }
-
-    comm.cout0() << "Read all points" << std::endl;
-    std::cout.flush();
-
     comm.barrier();
+    comm.cout0() << "Finished reading kNNGs" << std::endl;
+    std::cout.flush();
 
     disjoint_set.all_compress();
 
@@ -157,24 +190,40 @@ int main(int argc, char **argv) {
       bag_map.emplace(rep, bags.back());
     }
 
+    static std::vector<cls::dist_pm_knng_t::point_store_type *> pstores;
+    for (auto &local_manager : local_managers) {
+      auto *pstore = cls::dist_pm_knng_t::find_point_store(local_manager);
+      if (!pstore) {
+        comm.cerr() << "Failed to find point store" << std::endl;
+        MPI_Abort(comm.get_mpi_comm(), EXIT_FAILURE);
+      }
+      pstores.push_back(pstore);
+    }
+
+    const int original_comm_size = static_cast<int>(local_paths.size());
     disjoint_set.for_all([&](const auto &p, const auto &rep) {
+      const auto [new_owner, local_index] =
+          get_new_owner(p, original_comm_size, comm_size);
       comm.async(
-          cls::dist_pm_knng_t::get_owner(p, comm.size()),
-          [](cls::id_t p, cls::id_t rep) {
-            auto point = pstore.find(p);
-            if (point == pstore.end()) {
+          new_owner,
+          [](const int local_index, cls::id_t p, cls::id_t rep) {
+            auto      point       = pstores[local_index]->find(p);
+            if (point == pstores[local_index]->end()) {
               std::cerr << "Cannot find point for ID: " << p << std::endl;
               std::abort();
             }
-            s_bag_map->at(rep)->local_insert({p, point->second});
+            // A copy of the PM vector retains its Metall allocator, which
+            // cannot allocate when the datastore is open read only.
+            cls::point_t heap_point(point->second.begin(), point->second.end());
+            s_bag_map->at(rep)->local_insert({p, std::move(heap_point)});
           },
-          p, rep);
+          local_index, p, rep);
     });
 
     comm.barrier();
 
     for (auto &b : bags) {
-      if (b->size() > (size_t)comm.size()) b->rebalance();
+      if (b->size() > (size_t)comm_size) b->rebalance();
     }
 
     comm.cout0() << "CC took (s): " << cc_timer.elapsed() << std::endl;
@@ -182,8 +231,8 @@ int main(int argc, char **argv) {
 
     // for (auto &b : bags) {
     //   size_t s = b.size();
-    //   comm.cout0() << "    CC: size " << s << " local: " << b.local_size() <<
-    //   std::endl;
+    //   comm.cout0() << "    CC: size " << s << " local: " << b.local_size()
+    //   << std::endl;
     // }
 
     static std::vector<std::tuple<cls::id_t, cls::id_t, cls::distance_t>>
@@ -199,16 +248,10 @@ int main(int argc, char **argv) {
             std::pair<cls::id_t, cls::point_t> b) {
           return ref_distance_func(a.second, b.second);
         },
-        [&](std::pair<cls::id_t, cls::point_t> a,
-            std::pair<cls::id_t, cls::point_t> b) {
+        [&](std::pair<cls::id_t, cls::point_t> &a,
+            std::pair<cls::id_t, cls::point_t> &b) {
           auto dist = ref_distance_func(a.second, b.second);
-          comm.async(
-              cls::dist_pm_knng_t::get_owner(a.first, comm.size()),
-              [](cls::id_t a, cls::id_t b, cls::distance_t dist) {
-                local_bridge_edges.emplace_back(a, b, dist);
-                knng[a].emplace_back(b, dist);
-              },
-              a.first, b.first, dist);
+          local_bridge_edges.emplace_back(a.first, b.first, dist);
         });
 
     comm.barrier();
@@ -218,36 +261,33 @@ int main(int argc, char **argv) {
                  << std::endl;
 
     if (!bridge_edge_dump_file.empty()) {
-      comm.cout0() << "Gather bridge edges to rank 0" << std::endl;
-      // Gather bridge edges from all ranks to rank 0
-      static std::vector<std::tuple<cls::id_t, cls::id_t, cls::distance_t>>
-          all_bridge_edges;
-      comm.cf_barrier();
-      comm.async(
-          0,
-          [](const auto &edges) {
-            all_bridge_edges.insert(all_bridge_edges.end(), edges.begin(),
-                                    edges.end());
-          },
-          local_bridge_edges);
-      comm.barrier();
-
-      // Print bridge edges
-      if (comm.rank0()) {
-        comm.cout0() << "Dump bridge edges to " << bridge_edge_dump_file
-                     << std::endl;
-        std::ofstream ofs(bridge_edge_dump_file);
+      std::ofstream ofs;
+      if (comm.rank() == 0) {
+        ofs.open(bridge_edge_dump_file);
         if (!ofs.is_open()) {
-          comm.cerr0() << "Cannot open file: " << bridge_edge_dump_file
-                       << std::endl;
-          return EXIT_FAILURE;
-        }
-        for (const auto &edge : all_bridge_edges) {
-          ofs << std::get<0>(edge) << "\t" << std::get<1>(edge) << "\t"
-              << std::get<2>(edge) << std::endl;
+          std::cerr << "Failed to open bridge edge dump file: "
+                    << bridge_edge_dump_file << std::endl;
+          MPI_Abort(comm.get_mpi_comm(), EXIT_FAILURE);
         }
       }
+      for (auto &edge : local_bridge_edges) {
+        comm.async(
+            0,
+            [&](const cls::id_t a, const cls::id_t b, const cls::distance_t d) {
+              ofs << a << " " << b << " " << d << "\n";
+            },
+            std::get<0>(edge), std::get<1>(edge), std::get<2>(edge));
+      }
+      comm.barrier();
+      ofs.close();
+      if (comm.rank() == 0 && !ofs) {
+        std::cerr << "Failed to write to bridge edge dump file: "
+                  << bridge_edge_dump_file << std::endl;
+        MPI_Abort(comm.get_mpi_comm(), EXIT_FAILURE);
+      }
     }
+    comm.cout0() << "Dumped bridge edges to " << bridge_edge_dump_file
+                 << std::endl;
     comm.cf_barrier();
   }
   comm.cout0() << "Done" << std::endl;

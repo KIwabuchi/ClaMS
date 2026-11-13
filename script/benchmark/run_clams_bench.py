@@ -31,6 +31,13 @@ from script.benchmark.bench_utilities import add_cmd, add_msg, add_srun_cmd, set
 from script.utilities import create_dir, parse_float_list, parse_range
 
 
+def positive_int(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError('must be a positive integer')
+    return number
+
+
 def parse_options():
     # Set up argument parsing
     parser = argparse.ArgumentParser(description='Generate a batch shell script'
@@ -107,11 +114,20 @@ def parse_options():
                         help='Path to the root of output directories.'
                              'A new subdirectory will be created for each generation.')
 
-    # Batch Job configurations for DNND, AMST, Distributed HDBSCAN, and YGM partition comparison
-    parser.add_argument('-N', '--num_nodes', type=int, default=1,
-                        help='Number of nodes to use for running DNND and AMST')
-    parser.add_argument('-T', '--num_tasks_per_node', type=int, default=32,
-                        help='Number of tasks per node to use for running DNND and AMST')
+    # Default MPI size for all stages. The optional KNNG backup uses DNND's size.
+    parser.add_argument('-N', '--num_nodes', type=positive_int, default=1,
+                        help='Default number of nodes for each MPI stage')
+    parser.add_argument('-T', '--num_tasks_per_node', type=positive_int, default=32,
+                        help='Default number of MPI tasks per node for each stage')
+    for stage, label in (('dnnd', 'DNND and KNNG backup'),
+                         ('mfc', 'MFC'),
+                         ('amst', 'AMST'),
+                         ('clustering', 'ClaMS clustering'),
+                         ('ygm-eval', 'YGM clustering evaluation')):
+        parser.add_argument(f'--{stage}-nodes', type=positive_int,
+                            help=f'Number of nodes for {label}; defaults to -N')
+        parser.add_argument(f'--{stage}-tasks-per-node', type=positive_int,
+                            help=f'MPI tasks per node for {label}; defaults to -T')
 
     # Submit the job
     parser.add_argument('-S', '--submit_job', action='store_true',
@@ -196,7 +212,7 @@ def finish_stage(job_script):
 def add_clustering_evaluation(job_script, cluster_label_dir, amst_ds_path,
                               ground_truth_path, evaluator,
                               ygm_cluster_eval,
-                              num_tasks_per_node, verbose,
+                              mpi_sizes, verbose,
                               singleton_cluster_to_noise_points):
     if ygm_cluster_eval:
         job_script.write("echo \"Evaluating Clustering using YGM\"\n")
@@ -204,7 +220,7 @@ def add_clustering_evaluation(job_script, cluster_label_dir, amst_ds_path,
         evaluation_command = (f"{evaluator} {verbose_flag} "
                               f"-g {ground_truth_path} "
                               f"{cluster_label_dir}")
-        add_srun_cmd(num_tasks_per_node, evaluation_command, job_script)
+        add_srun_cmd(*mpi_sizes['ygm_eval'], evaluation_command, job_script)
     else:
         job_script.write(
             "echo \"Evaluating Clustering using python script\"\n")
@@ -218,7 +234,7 @@ def add_clustering_evaluation(job_script, cluster_label_dir, amst_ds_path,
 
 def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
                    amst_ds_path, clustering_exe,
-                   evaluator, ygm_cluster_eval, num_tasks_per_node,
+                   evaluator, ygm_cluster_eval, mpi_sizes,
                    verbose, ground_truth_path,
                    singleton_cluster_to_noise_points,
                    noise_point_clustering_exe,
@@ -237,7 +253,7 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
                               f" -o {cluster_label_dir} "
                               f" -c {cluster_tree_dir} "
                               f" -s ")
-    add_srun_cmd(num_tasks_per_node, hpc_clustering_command, job_script)
+    add_srun_cmd(*mpi_sizes['clustering'], hpc_clustering_command, job_script)
     finish_stage(job_script)
 
     if cluster_noise_points:
@@ -263,7 +279,7 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
         job_script.write(f"echo \"MST-based cluster guess: False\"\n")
         add_clustering_evaluation(
             job_script, cluster_label_text_file, amst_ds_path, ground_truth_path,
-            evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
+            evaluator, ygm_cluster_eval, mpi_sizes, verbose,
             singleton_cluster_to_noise_points)
         finish_stage(job_script)
 
@@ -273,7 +289,7 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
             add_clustering_evaluation(
                 job_script, no_noise_points_cluster_label_file, amst_ds_path,
                 ground_truth_path, evaluator, ygm_cluster_eval,
-                num_tasks_per_node, verbose, singleton_cluster_to_noise_points)
+                mpi_sizes, verbose, singleton_cluster_to_noise_points)
             finish_stage(job_script)
 
     job_script.write("echo \"\" \n")
@@ -286,7 +302,7 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
 # We need a command instead of a value because the value must be calculated
 # after generating dataset for powersqueze, which happens in the same batch.
 def gen_clams_bench_script(job_name, job_dir, work_dir,
-                           num_nodes, num_tasks_per_node,
+                           mpi_sizes,
                            dnnd_exe, nng_k, distance_func,
                            points_file_format, point_path,
                            nng_r, nng_delta,
@@ -313,10 +329,19 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
     with open(job_script_path, 'w') as job_script:
 
         # Set up the batch script header
-        set_up_batch_header(job_script, job_name, job_dir, num_nodes)
+        active_stages = ['mfc', 'amst', 'clustering']
+        if not input_dnnd_ds_path:
+            active_stages.append('dnnd')
+        if ground_truth_path and ygm_cluster_eval:
+            active_stages.append('ygm_eval')
+        allocation_nodes = max(mpi_sizes[stage][0] for stage in active_stages)
+        allocation_tasks_per_node = max(mpi_sizes[stage][1]
+                                        for stage in active_stages)
+        set_up_batch_header(job_script, job_name, job_dir, allocation_nodes,
+                            allocation_tasks_per_node)
         add_cmd(f'cd {shlex.quote(os.getcwd())}', job_script)
-        job_script.write(f"echo \"Compute nodes: {num_nodes}\"\n")
-        job_script.write(f"echo \"Tasks per node: {num_tasks_per_node}\"\n")
+        job_script.write(f"echo \"Allocated nodes: {allocation_nodes}\"\n")
+        job_script.write(f"echo \"Allocated tasks per node: {allocation_tasks_per_node}\"\n")
 
         add_cmd(f'mkdir -p {work_dir}', job_script, True, False)
 
@@ -328,14 +353,13 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             dnnd_batch_size = 2 ** 25
             verbose_flag = '-v' if verbose else ''
             dnnd_command = f"{dnnd_exe} {verbose_flag} -k {nng_k} -r {nng_r} -d {nng_delta} -f {distance_func} -o {dnnd_ds_path} -b {dnnd_batch_size} -p {points_file_format} {point_path}"
-            add_srun_cmd(num_tasks_per_node, dnnd_command, job_script)
+            add_srun_cmd(*mpi_sizes['dnnd'], dnnd_command, job_script)
             finish_stage(job_script)
             if backup_knng:
                 dnnd_ds_path_backup = f"{dnnd_ds_path}_backup"
                 job_script.write(f"echo \"Backing up KNNG datastore\"\n")
                 backup_knng_command = f"{pm_datastore_copy_exe} -s {dnnd_ds_path} -t {dnnd_ds_path_backup}"
-                add_srun_cmd(num_tasks_per_node,
-                             backup_knng_command, job_script)
+                add_srun_cmd(*mpi_sizes['dnnd'], backup_knng_command, job_script)
         else:
             job_script.write(
                 f"Using existing DNND datastore at {input_dnnd_ds_path}\n")
@@ -344,7 +368,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
         # Connect the CCs
         start_stage(job_script, "MFC")
         mfc_command = f"{mfc_exe} -d {dnnd_ds_path} -f {distance_func}"
-        add_srun_cmd(num_tasks_per_node, mfc_command, job_script)
+        add_srun_cmd(*mpi_sizes['mfc'], mfc_command, job_script)
         finish_stage(job_script)
 
         # Convert to core distance
@@ -368,7 +392,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                               amst_approx_bound, job_script)
             amst_ds_path = f"{work_dir}/amst_pm_datastore_a{amst_approx_bound}"
             amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path} -e {amst_approx_bound}"
-            add_srun_cmd(num_tasks_per_node, amst_command, job_script)
+            add_srun_cmd(*mpi_sizes['amst'], amst_command, job_script)
             finish_stage(job_script)
 
             # Run the HPC Clustering step
@@ -376,7 +400,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
                 run_clustering(
                     job_script, set_cmd, work_dir, amst_approx_bound,
                     amst_ds_path, clustering_exe,
-                    evaluator, ygm_cluster_eval, num_tasks_per_node, verbose,
+                    evaluator, ygm_cluster_eval, mpi_sizes, verbose,
                     ground_truth_path, singleton_cluster_to_noise_points,
                     noise_point_clustering_exe, cluster_noise_points,
                     serialize_pm_cluster_data_exe)
@@ -401,6 +425,13 @@ def main():
     # Remove '--' from opts.sbatch_opts if necessary
     if opts.sbatch_opts.startswith('--'):
         opts.sbatch_opts = opts.sbatch_opts[2:]
+
+    mpi_sizes = {}
+    for stage in ('dnnd', 'mfc', 'amst', 'clustering', 'ygm_eval'):
+        nodes = getattr(opts, f'{stage}_nodes') or opts.num_nodes
+        tasks_per_node = (getattr(opts, f'{stage}_tasks_per_node')
+                          or opts.num_tasks_per_node)
+        mpi_sizes[stage] = (nodes, tasks_per_node)
 
     job_name = generate_job_name()
     print(f"Job name: {job_name}")
@@ -437,8 +468,7 @@ def main():
 
     # Generate a benchmark batch script
     job_script = gen_clams_bench_script(job_name, job_dir, work_dir,
-                                        opts.num_nodes,
-                                        opts.num_tasks_per_node,
+                                        mpi_sizes,
                                         dnnd_exe, opts.nng_k,
                                         opts.distance_func,
                                         opts.points_file_format,

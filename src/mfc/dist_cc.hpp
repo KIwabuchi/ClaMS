@@ -19,7 +19,7 @@
 
 class dist_cc {
  private:
-  using self_t = dist_cc;
+  using self_t       = dist_cc;
   using input_knng_t = clams::pm_knng_t;
   using work_knng_t =
       std::unordered_map<clams::id_t, std::vector<clams::neighbor_t>>;
@@ -36,9 +36,9 @@ class dist_cc {
     {
       const auto uknng = priv_make_undirected_graph();
       m_world.cout0() << "Converted to undirected knng with "
-                      << m_world.all_reduce_sum(uknng.size()) << " points and "
-                      << m_world.all_reduce_sum(count_neighbors(uknng))
-                      << " edges." << std::endl;
+                      << ygm::sum(uknng.size(), m_world) << " points and "
+                      << ygm::sum(count_neighbors(uknng), m_world) << " edges."
+                      << std::endl;
       priv_run_cc(uknng);
     }
     m_world.cout0() << "Connected components algorithm finished." << std::endl;
@@ -101,7 +101,8 @@ class dist_cc {
       for (const auto &neighbor : neighbors) {
         m_world.async(
             clams::dist_pm_knng_t::get_owner(neighbor.id, m_world.size()),
-            [](const auto ptr, const clams::id_t src, const clams::neighbor_t ngbr) {
+            [](const auto ptr, const clams::id_t src,
+               const clams::neighbor_t ngbr) {
               (*ptr)[ngbr.id].emplace_back(src, ngbr.distance);
             },
             uknng_ptr, source, neighbor);

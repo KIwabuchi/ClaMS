@@ -4,7 +4,8 @@
 import os
 
 
-def set_up_batch_header(script_file, job_name, job_dir, num_nodes):
+def set_up_batch_header(script_file, job_name, job_dir, num_nodes,
+                        num_tasks_per_node):
     # Make dir
     if not os.path.exists(job_dir):
         os.makedirs(job_dir)
@@ -12,6 +13,7 @@ def set_up_batch_header(script_file, job_name, job_dir, num_nodes):
     script_file.write("#!/bin/bash\n")
     script_file.write(f"#SBATCH --job-name={job_name}\n")
     script_file.write(f"#SBATCH --nodes={num_nodes}\n")
+    script_file.write(f"#SBATCH --ntasks-per-node={num_tasks_per_node}\n")
 
     out_file = f"{job_dir}/out.log"
     script_file.write(f"#SBATCH --output={out_file}\n")
@@ -45,7 +47,9 @@ def add_parameter_msg(parameter, value, script_file):
     add_msg(msg, script_file)
 
 
-def add_srun_cmd(num_tasks_per_node, command, script_file, echo=True,
+def add_srun_cmd(num_nodes, num_tasks_per_node, command, script_file, echo=True,
                  check_return_code=True):
-    add_cmd(f"srun --ntasks-per-node={num_tasks_per_node} {command}",
+    num_tasks = num_nodes * num_tasks_per_node
+    add_cmd(f"srun --nodes={num_nodes} --ntasks={num_tasks} "
+            f"--ntasks-per-node={num_tasks_per_node} {command}",
             script_file, echo, check_return_code)

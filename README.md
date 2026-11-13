@@ -68,12 +68,27 @@ python3 -m script.benchmark.run_clams_bench -p point_features.txt -g ground_trut
 # To submit a job manually using the generated script
 sbatch /path/to/generated_batch_script.sh
 
+# Set default MPI size to 2 nodes x 16 tasks, then override selected stages.
+# The optional KNNG backup (-R) uses the same size as DNND.
+python3 -m script.benchmark.run_clams_bench -p point_features.txt \
+  -N 2 -T 16 -R \
+  --dnnd-nodes 4 --dnnd-tasks-per-node 32 \
+  --mfc-nodes 1 --mfc-tasks-per-node 8 \
+  --amst-nodes 2 --amst-tasks-per-node 16 \
+  --clustering-nodes 2 --clustering-tasks-per-node 16
+
 # Use a demo dataset
 pushd ../dataset/mnist
 python3 ./download_mnist.py
 popd
 python3 -m script.benchmark.run_clams_bench -S -p ../dataset/mnist/points.txt -g ../dataset/mnist/labels.txt
 ```
+
+`-N` and `-T` supply defaults for every MPI stage. You can also set
+`--ygm-eval-nodes` and `--ygm-eval-tasks-per-node` when using `-y` with ground
+truth labels. The generated batch job requests the largest node count and
+tasks per node needed by its active MPI stages; each `srun` uses that stage's
+node and task counts.
 
 The Python scripts form the `script` package. Run them with `python3 -m`
 from the repository root or from a freshly configured `build/` directory.

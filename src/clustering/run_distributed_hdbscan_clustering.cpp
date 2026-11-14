@@ -169,26 +169,6 @@ int main(int argc, char *argv[]) {
   spdlog::stopwatch sw_round;
   spdlog::stopwatch sw_step;
 
-  // Phase 1 times
-  float init_min_incident_edge_time = 0.0;
-  float min_incident_edge_time      = 0.0;
-  float contract_edges_time         = 0.0;
-  float get_components_time         = 0.0;
-  float update_parent_time          = 0.0;
-  float update_edges_time           = 0.0;
-
-  // Phase 2 times
-  float assign_edges_to_chains_time              = 0.0;
-  float assign_contracted_edges_to_clusters_time = 0.0;
-  float fill_initial_cluster_info_time           = 0.0;
-  float root_chain_to_clusters_time              = 0.0;
-
-  // Phase 3 times
-  float calculate_non_root_chain_size_stability_time = 0.0;
-  float calculate_root_chain_size_stability_time     = 0.0;
-  float select_clusters_time                         = 0.0;
-  float label_points_time                            = 0.0;
-
   // Read MST edges
   sw_round.reset();
   sw_step.reset();
@@ -276,22 +256,29 @@ int main(int argc, char *argv[]) {
     std::exit(EXIT_FAILURE);
   }
 
-  /* Initial set up of needed YGM maps */
+  /* Initial set up of variables needed after phase 1 */
 
   // Map of supernode children of edges in the dendrogram
   // edge id -> array of supernode children (up to 2 children, actually will
   // have 0 or 2 children)
   ygm::container::map<id_t, alpha_edge_info> alpha_edge_map(world);
-  auto alpha_edge_map_ptr = alpha_edge_map.get_ygm_ptr();
-
-  /* Phase 1: MST contraction */
-  if (world.rank() == 0) {
-    spdlog::info("Phase 1: MST contraction");
-  }
-  sw_phase.reset();
-
-  static uint32_t final_round;
+  auto            alpha_edge_map_ptr = alpha_edge_map.get_ygm_ptr();
+  static uint32_t final_round;  // Number of MST contraction rounds
   {
+    /* Phase 1: MST contraction */
+    if (world.rank() == 0) {
+      spdlog::info("Phase 1: MST contraction");
+    }
+    sw_phase.reset();
+
+    // Phase 1 times
+    float init_min_incident_edge_time = 0.0;
+    float min_incident_edge_time      = 0.0;
+    float contract_edges_time         = 0.0;
+    float get_components_time         = 0.0;
+    float update_parent_time          = 0.0;
+    float update_edges_time           = 0.0;
+
     // Incidence map of supernode rep (we know the round, so we drop it) ->
     // vector of all incident edge ids
     ygm::container::map<id_t, id_t> min_incident_edge_map(world);
@@ -326,26 +313,15 @@ int main(int argc, char *argv[]) {
 
       // Find all edges to contract and add to disjoint set
       sw_step.reset();
-      id_t num_nodes_at_start_of_round;
-      contract_edges(round, min_incident_edge_map, edge_contraction_array,
-                     alpha_edge_map_ptr, tree_components_djset);
-      num_nodes_at_start_of_round = min_incident_edge_map.size();
-
-      // Count how many edges were contracted this round
-      id_t num_edges_contracted = 0;
-      edge_contraction_array.for_all(
-          [&num_edges_contracted]([[maybe_unused]] const id_t &edge_id,
-                                  const edge_contraction_info  edge_info) {
-            if (edge_info.contraction_round == round) {
-              ++num_edges_contracted;
-            }
-          });
-      world.barrier();
-
+      id_t num_nodes_at_start_of_round = min_incident_edge_map.size();
+      id_t num_edges_contracted =
+          contract_edges(round, min_incident_edge_map, edge_contraction_array,
+                         alpha_edge_map_ptr, tree_components_djset);
       contract_edges_time += sw_step.elapsed().count();
       sw_step.reset();
 
-      // before this round
+      // When possible, update the dendrogram parent for edges that were
+      // contracted before this round
       if (round >= 2) {
         if (min_incident_edge_map.size() <=
             HDBSCAN_LOCAL_COPY_NUM_SUPERNODES_THRESHOLD) {
@@ -471,10 +447,7 @@ int main(int argc, char *argv[]) {
   }  // End phase 1
 
   /* Phase 2: Expand dendrogram and get cluster hierarchy */
-  if (world.rank() == 0) {
-    spdlog::info("Phase 2: Construct cluster hierarchy");
-  }
-  sw_phase.reset();
+  // Define variables needed in Phase 3 as well
 
   // Map of leaf clusters (identified by supernode only) to edges and info
   ygm::container::map<supernode_t, full_leaf_cluster_info> leaf_cluster_map(
@@ -503,6 +476,17 @@ int main(int argc, char *argv[]) {
   static supernode_t root_chain_supernode = {0, final_round + 1};
 
   {
+    if (world.rank() == 0) {
+      spdlog::info("Phase 2: Construct cluster hierarchy");
+    }
+    sw_phase.reset();
+
+    // Phase 2 times
+    float assign_edges_to_chains_time              = 0.0;
+    float assign_contracted_edges_to_clusters_time = 0.0;
+    float fill_initial_cluster_info_time           = 0.0;
+    float root_chain_to_clusters_time              = 0.0;
+
     // Initial setup for this phase
 
     // Local vector of root chain alpha-edges. We will later use this to fill
@@ -736,35 +720,42 @@ int main(int argc, char *argv[]) {
 
     full_root_chain_cluster_array.clear();
 
+    if (world.rank() == 0) {
+      spdlog::info(" Time for this phase (s): {:.3f}", sw_phase);
+      if (opt.verbose) {
+        spdlog::info(" Phase 2 time breakdown:");
+        spdlog::info("   Time to assign edges to chains (s): {:.3f}",
+                     assign_edges_to_chains_time);
+        spdlog::info(
+            "   Time to assign round-1 contracted edges to clusters (s): "
+            "{:.3f}",
+            assign_contracted_edges_to_clusters_time);
+        spdlog::info(
+            "   Time to fill missing cluster information (birth "
+            "distance, parent, children, etc.) (s): {:.3f} ",
+            fill_initial_cluster_info_time);
+      }
+    }
+
   }  // End Phase 2
 
-  if (world.rank() == 0) {
-    spdlog::info(" Time for this phase (s): {:.3f}", sw_phase);
-    if (opt.verbose) {
-      spdlog::info(" Phase 2 time breakdown:");
-      spdlog::info("   Time to assign edges to chains (s): {:.3f}",
-                   assign_edges_to_chains_time);
-      spdlog::info(
-          "   Time to assign round-1 contracted edges to clusters (s): "
-          "{:.3f}",
-          assign_contracted_edges_to_clusters_time);
-      spdlog::info(
-          "   Time to fill missing cluster information (birth "
-          "distance, parent, children, etc.) (s): {:.3f} ",
-          fill_initial_cluster_info_time);
-    }
-  }
-
   /* Phase 3: Select flat clusters */
-  if (world.rank() == 0) {
-    spdlog::info("Phase 3: Extract flat clustering");
-  }
-  sw_phase.reset();
 
   // Initialize map of point id -> cluster id
   ygm::container::map<id_t, cluster_id_t> point_to_cluster_id_map(world);
 
   {
+    if (world.rank() == 0) {
+      spdlog::info("Phase 3: Extract flat clustering");
+    }
+    sw_phase.reset();
+
+    // Phase 3 times
+    float calculate_non_root_chain_size_stability_time = 0.0;
+    float calculate_root_chain_size_stability_time     = 0.0;
+    float select_clusters_time                         = 0.0;
+    float label_points_time                            = 0.0;
+
     // Set up variables used through out Phase 3
     static id_t num_valid_clusters;
     num_valid_clusters = 0;
@@ -978,25 +969,26 @@ int main(int argc, char *argv[]) {
                       MPI_MAX, world.get_mpi_comm());
 
         auto correction_result = correct_root_chain_stability_traversing_up(
-            possible_clusters_for_selection_array, world, max_cluster_edge_id);
+            possible_clusters_for_selection_array, root_chain_cluster_map,
+            max_cluster_edge_id);
         selected_root_chain_cluster_edge_id = correction_result.first;
         int num_correction_iterations       = correction_result.second;
 
-        // Update the corrected root chain stability_traversing_up
-        auto update_stability_traversing_up_lambda =
-            []([[maybe_unused]] const id_t &cluster_edge_id,
-               root_chain_cluster_info     &cluster_info,
-               const float                  new_stability_traversing_up) {
-              cluster_info.stability_traversing_up =
-                  new_stability_traversing_up;
-            };
-        for (auto it = possible_clusters_for_selection_array.local_begin();
-             it != possible_clusters_for_selection_array.local_end(); ++it) {
-          root_chain_cluster_map.async_visit(
-              it->value.first, update_stability_traversing_up_lambda,
-              it->value.second.stability_traversing_up);
-        }
-        world.barrier();
+        // // Update the corrected root chain stability_traversing_up
+        // auto update_stability_traversing_up_lambda =
+        //     []([[maybe_unused]] const id_t &cluster_edge_id,
+        //        root_chain_cluster_info     &cluster_info,
+        //        const float                  new_stability_traversing_up) {
+        //       cluster_info.stability_traversing_up =
+        //           new_stability_traversing_up;
+        //     };
+        // for (auto it = possible_clusters_for_selection_array.local_begin();
+        //      it != possible_clusters_for_selection_array.local_end(); ++it) {
+        //   root_chain_cluster_map.async_visit(
+        //       it->value.first, update_stability_traversing_up_lambda,
+        //       it->value.second.stability_traversing_up);
+        // }
+        // world.barrier();
 
         if (world.rank() == 0 && opt.verbose) {
           spdlog::info(
@@ -1022,12 +1014,6 @@ int main(int argc, char *argv[]) {
     world.barrier();
 
     if (world.rank() == 0) {
-      // if (selected_root_chain_cluster_edge_id > 0) {
-      //   spdlog::info(
-      //       "  Root chain cluster with edge id {} selected as a "
-      //       "flat cluster",
-      //       selected_root_chain_cluster_edge_id);
-      // }
       if (opt.verbose) {
         spdlog::info("   Time to process root chain clusters (s): {:.3f}",
                      calculate_root_chain_size_stability_time);
@@ -1109,29 +1095,29 @@ int main(int argc, char *argv[]) {
       }
     }
 
-  }  // End phase 3
-
-  if (world.rank() == 0) {
-    spdlog::info(" Time for this phase (s): {:.3f}", sw_phase);
-    if (opt.verbose) {
-      spdlog::info(" Phase 3 time breakdown:");
-      spdlog::info(
-          "   Time to calculate non-root-chain cluster stabilities and "
-          "sizes (s): {:.3f}",
-          calculate_non_root_chain_size_stability_time);
-      spdlog::info(
-          "   Time to calculate root-chain cluster stabilities and "
-          "sizes (s): {:.3f}",
-          calculate_root_chain_size_stability_time);
-      spdlog::info("   Time to select flat clusters (s): {:.3f}",
-                   select_clusters_time);
-      spdlog::info("   Time to assign cluster labels to points (s): {:.3f} ",
-                   label_points_time);
+    if (world.rank() == 0) {
+      spdlog::info(" Time for this phase (s): {:.3f}", sw_phase);
+      if (opt.verbose) {
+        spdlog::info(" Phase 3 time breakdown:");
+        spdlog::info(
+            "   Time to calculate non-root-chain cluster stabilities and "
+            "sizes (s): {:.3f}",
+            calculate_non_root_chain_size_stability_time);
+        spdlog::info(
+            "   Time to calculate root-chain cluster stabilities and "
+            "sizes (s): {:.3f}",
+            calculate_root_chain_size_stability_time);
+        spdlog::info("   Time to select flat clusters (s): {:.3f}",
+                     select_clusters_time);
+        spdlog::info("   Time to assign cluster labels to points (s): {:.3f} ",
+                     label_points_time);
+      }
+      spdlog::info("Total time other than writing output files (s): {:.3f}",
+                   sw_clustering);
     }
-    spdlog::info("Total time other than writing output files (s): {:.3f}",
-                 sw_clustering);
-  }
-  world.barrier();
+    world.barrier();
+
+  }  // End phase 3
 
   // Write point labels to file
   {

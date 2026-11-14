@@ -36,7 +36,6 @@ namespace clams::clustering {
  * info)
  * @param leaf_cluster_map_ptr Pointer for YGM map of leaf cluster name
  * (supernode) -> leaf cluster info.
- * @param chain_name Name of this chain. Used only for debugging printouts.
  *
  * @return The number of valid clusters found when processing this chain. If a
  * chain cluster has two children with size at least min_cluster_size, we say
@@ -561,11 +560,6 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
                     root_chain_cluster_map_ptr,
         const id_t &cluster_edge_id, root_chain_cluster_info &cluster_info,
         id_t chain_child_size) {
-      // std::cout << "Visiting root chain cluster " << cluster_edge_id
-      //           << " with child size " << cluster_info.child_size
-      //           << " and chain child size = " << chain_child_size
-      //           << std::endl;  // debug
-
       // If this is a valid root chain cluster (both children have min cluster
       // size), set this as the min valid cluster id and stop
       if (chain_child_size >= min_cluster_size &&
@@ -1422,8 +1416,11 @@ void update_root_chain_cluster_info(
  */
 std::pair<id_t, int> correct_root_chain_stability_traversing_up(
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
-              &possible_clusters_for_selection_array,
-    ygm::comm &comm, id_t max_cluster_edge_id) {
+        &possible_clusters_for_selection_array,
+    ygm::container::map<id_t, root_chain_cluster_info> &root_chain_cluster_map,
+    id_t                                                max_cluster_edge_id) {
+  ygm::comm &comm = root_chain_cluster_map.comm();
+
   id_t selected_root_chain_cluster_edge_id = 0;
   int  num_correction_iterations           = 0;
   while (num_correction_iterations <
@@ -1482,14 +1479,6 @@ std::pair<id_t, int> correct_root_chain_stability_traversing_up(
              std::pair<id_t, root_chain_cluster_info> &value) {
             stability_correction =
                 value.second.stability - value.second.stability_traversing_up;
-            // std::cout << "Visiting root chain cluster " << value.first
-            //           << " with size = " << value.second.size
-            //           << ", stability = " << value.second.stability
-            //           << " and stability traversing up = "
-            //           << value.second.stability_traversing_up
-            //           << ", giving correction factor = " <<
-            //           stability_correction
-            //           << std::endl;  // debug
             value.second.stability_traversing_up = value.second.stability;
           });
     }
@@ -1516,6 +1505,21 @@ std::pair<id_t, int> correct_root_chain_stability_traversing_up(
     }
     comm.barrier();
   }
+
+  // Update the corrected root chain stability_traversing_up
+  auto update_stability_traversing_up_lambda =
+      []([[maybe_unused]] const id_t &cluster_edge_id,
+         root_chain_cluster_info     &cluster_info,
+         const float                  new_stability_traversing_up) {
+        cluster_info.stability_traversing_up = new_stability_traversing_up;
+      };
+  for (auto it = possible_clusters_for_selection_array.local_begin();
+       it != possible_clusters_for_selection_array.local_end(); ++it) {
+    root_chain_cluster_map.async_visit(
+        it->value.first, update_stability_traversing_up_lambda,
+        it->value.second.stability_traversing_up);
+  }
+  comm.barrier();
 
   return std::make_pair(selected_root_chain_cluster_edge_id,
                         num_correction_iterations);

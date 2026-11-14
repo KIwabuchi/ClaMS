@@ -81,7 +81,7 @@ void fill_init_min_incident_edge_map(
  * components after edge contraction.
  */
 template <typename ygm_container_type>
-void contract_edges(
+id_t contract_edges(
     uint32_t _round, ygm_container_type &min_incident_edge_map,
     ygm::container::array<edge_contraction_info> &edge_contraction_array,
     ygm::ygm_ptr<ygm::container::map<id_t, alpha_edge_info>> alpha_edge_map_ptr,
@@ -130,6 +130,19 @@ void contract_edges(
       };
   min_incident_edge_map.for_all(contract_edges_lambda);
   comm.barrier();
+
+  // Count how many edges were contracted this round
+  id_t num_edges_contracted = 0;
+  edge_contraction_array.for_all(
+      [&num_edges_contracted]([[maybe_unused]] const id_t &edge_id,
+                              const edge_contraction_info  edge_info) {
+        if (edge_info.contraction_round == round) {
+          ++num_edges_contracted;
+        }
+      });
+  comm.barrier();
+
+  return num_edges_contracted;
 }
 
 /**

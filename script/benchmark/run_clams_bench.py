@@ -25,7 +25,12 @@ import sys
 import argparse
 import shlex
 import time
+from pathlib import Path
 from datetime import datetime
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = SCRIPT_DIR.parent.parent
+sys.path.insert(0, str(SCRIPT_DIR))
 
 from script.benchmark.bench_utilities import add_cmd, add_msg, add_srun_cmd, set_up_batch_header, add_parameter_msg
 from script.utilities import create_dir, parse_float_list, parse_range
@@ -367,7 +372,8 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
 
         # Connect the CCs
         start_stage(job_script, "MFC")
-        mfc_command = f"{mfc_exe} -d {dnnd_ds_path} -f {distance_func}"
+        bridge_edge_path = f"{work_dir}/mfc_bridge_edges.txt"
+        mfc_command = f"{mfc_exe} -d {dnnd_ds_path} -f {distance_func} -b {bridge_edge_path}"
         add_srun_cmd(*mpi_sizes['mfc'], mfc_command, job_script)
         finish_stage(job_script)
 
@@ -391,7 +397,7 @@ def gen_clams_bench_script(job_name, job_dir, work_dir,
             add_parameter_msg("AMST-ApproxBound",
                               amst_approx_bound, job_script)
             amst_ds_path = f"{work_dir}/amst_pm_datastore_a{amst_approx_bound}"
-            amst_command = f"{amst_exe} -d {dnnd_ds_path} -p {amst_ds_path} -e {amst_approx_bound}"
+            amst_command = f"{amst_exe} -d {dnnd_ds_path} -b {bridge_edge_path} -p {amst_ds_path} -e {amst_approx_bound}"
             add_srun_cmd(*mpi_sizes['amst'], amst_command, job_script)
             finish_stage(job_script)
 

@@ -1,7 +1,6 @@
 // Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
 // Project Developers. See the top-level COPYRIGHT file for details.
 
-
 // Read kNNG constructed by DNND and compute mutual reachability distances
 // (MRD).
 
@@ -15,8 +14,6 @@
 
 #include "../common.hpp"
 #include "../details/shm_graph.hpp"
-
-namespace omp = metall::utility::omp;
 
 bool parse_option(int argc, char *argv[],
                   std::filesystem::path &input_knng_path, int &min_samples,
@@ -62,7 +59,7 @@ bool parse_option(int argc, char *argv[],
 
 int main(int argc, char *argv[]) {
   std::filesystem::path input_knng_path;
-  int min_samples = 0;
+  int                   min_samples = 0;
   std::filesystem::path output_knn_path;
 
   if (!parse_option(argc, argv, input_knng_path, min_samples,
@@ -80,7 +77,7 @@ int main(int argc, char *argv[]) {
   std::cout << "#of edges: " << graph.num_values() << std::endl;
 
   clams::shm_graph_t mrd_graph(graph);
-  std::vector<id_t> vertices;
+  std::vector<id_t>  vertices;
   for (auto vit = graph.keys_begin(); vit != graph.keys_end(); ++vit) {
     vertices.push_back(vit->first);
   }
@@ -93,8 +90,8 @@ int main(int argc, char *argv[]) {
           (graph.values_begin(vid) + min_samples - 1)->second;
       const auto core_dist_b =
           (graph.values_begin(nid) + min_samples - 1)->second;
-      auto &dist = eit->second;  // original distance
-      const auto mrd = std::max<clams::distance_t>(
+      auto      &dist = eit->second;  // original distance
+      const auto mrd  = std::max<clams::distance_t>(
           std::max<clams::distance_t>(core_dist_a, core_dist_b), dist);
       // std::cout << mrd << " == max " << core_dist_a << ", " << core_dist_b
       //           << ", " << dist << std::endl;

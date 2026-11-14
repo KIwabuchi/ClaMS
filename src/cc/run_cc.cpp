@@ -1,7 +1,6 @@
 // Copyright 2023-2026 Lawrence Livermore National Security, LLC and other ClaMS
 // Project Developers. See the top-level COPYRIGHT file for details.
 
-
 #include <unistd.h>
 
 #include <filesystem>
@@ -10,11 +9,11 @@
 #include <unordered_map>
 #include <vector>
 
-#include "cc.hpp"
 #include "../common.hpp"
 #include "../details/shm_graph.hpp"
+#include "cc.hpp"
 
-namespace omp = metall::utility::omp;
+namespace mtl_omp = metall::utility::omp;
 
 bool parse_option(int argc, char *argv[], std::filesystem::path &knng_dir,
                   std::filesystem::path &output_dir, bool &detailed_analysis,
@@ -27,26 +26,26 @@ bool parse_option(int argc, char *argv[], std::filesystem::path &knng_dir,
   int opt;
   while ((opt = ::getopt(argc, argv, "i:o:dc:")) != -1) {
     switch (opt) {
-    case 'i': {
-      knng_dir = std::filesystem::path(optarg);
-      break;
-    }
-    case 'o': {
-      output_dir = std::filesystem::path(optarg);
-      break;
-    }
-    case 'd': {
-      detailed_analysis = true;
-      break;
-    }
-    case 'c': {
-      cc_count_file = std::filesystem::path(optarg);
-      break;
-    }
-    default: {
-      std::cerr << "Unknown option: " << opt << std::endl;
-      return false;
-    }
+      case 'i': {
+        knng_dir = std::filesystem::path(optarg);
+        break;
+      }
+      case 'o': {
+        output_dir = std::filesystem::path(optarg);
+        break;
+      }
+      case 'd': {
+        detailed_analysis = true;
+        break;
+      }
+      case 'c': {
+        cc_count_file = std::filesystem::path(optarg);
+        break;
+      }
+      default: {
+        std::cerr << "Unknown option: " << opt << std::endl;
+        return false;
+      }
     }
   }
 
@@ -61,7 +60,7 @@ bool parse_option(int argc, char *argv[], std::filesystem::path &knng_dir,
 int main(int argc, char *argv[]) {
   std::filesystem::path knng_dir;
   std::filesystem::path output_dir;
-  bool detailed_analysis = false;
+  bool                  detailed_analysis = false;
   std::filesystem::path cc_count_file;
 
   if (!parse_option(argc, argv, knng_dir, output_dir, detailed_analysis,
@@ -122,10 +121,10 @@ int main(int argc, char *argv[]) {
   std::filesystem::create_directory(output_dir);
 
   OMP_DIRECTIVE(parallel) {
-    const auto range = partial_range(vertices.size(), omp::get_thread_num(),
-                                     omp::get_num_threads());
-    std::string name = "cc_table-" + std::to_string(omp::get_thread_num());
-    auto file_path = output_dir / name;
+    const auto range = partial_range(vertices.size(), mtl_omp::get_thread_num(),
+                                     mtl_omp::get_num_threads());
+    std::string name = "cc_table-" + std::to_string(mtl_omp::get_thread_num());
+    auto        file_path = output_dir / name;
     std::ofstream ofs(file_path);
     if (!ofs) {
       std::cerr << "Failed to create: " << file_path << std::endl;

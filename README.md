@@ -81,7 +81,7 @@ python3 -m script.benchmark.run_clams_bench -p point_features.txt \
 pushd ../dataset/mnist
 python3 ./download_mnist.py
 popd
-python3 -m script.benchmark.run_clams_bench -S -p ../dataset/mnist/points.txt -g ../dataset/mnist/labels.txt
+python3 -m script.benchmark.run_clams_bench -S -p ../dataset/mnist/points.txt -g ../dataset/mnist/labels.txt -m 50 -N 1 -T 4
 ```
 
 `-N` and `-T` supply defaults for every MPI stage. You can also set
@@ -104,7 +104,7 @@ source ./venv/bin/activate
 # In clams/build
 # -m: min cluster size
 # -s: min samples
-python3 -m script.benchmark.run_hdbscan_bench -m 10 -s 5 -p ../dataset/fashion-mnist/points.txt -g ../dataset/fashion-mnist/labels.txt
+python3 -m script.benchmark.run_hdbscan_bench -m 10 -s 5 -p ../dataset/mnist/points.txt -g ../dataset/mnist/labels.txt
 ```
 
 # License

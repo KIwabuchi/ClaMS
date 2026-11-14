@@ -24,8 +24,6 @@
 #include "../common.hpp"
 #include "../details/shm_graph.hpp"
 
-namespace omp = metall::utility::omp;
-
 // todo:
 // add 'max_k' option (-k): the maximum number of neighbors to consider for
 // correlation analysis.

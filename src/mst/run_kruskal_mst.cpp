@@ -22,7 +22,7 @@
 
 #include "../common.hpp"
 
-namespace omp = metall::utility::omp;
+namespace mtl_omp = metall::utility::omp;
 
 bool parse_option(int argc, char *argv[], std::filesystem::path &knng_dir,
                   std::filesystem::path &output_dir) {
@@ -114,16 +114,16 @@ int main(int argc, char *argv[]) {
   std::filesystem::create_directories(output_dir);
   OMP_DIRECTIVE(parallel) {
     std::string path =
-        output_dir /
-        (std::string("mst-") + std::to_string(omp::get_thread_num()) + ".txt");
+        output_dir / (std::string("mst-") +
+                      std::to_string(mtl_omp::get_thread_num()) + ".txt");
     std::ofstream ofs(path);
     if (!ofs.is_open()) {
       spdlog::critical("Cannot open file: {}", path);
       std::exit(EXIT_FAILURE);
     }
 
-    auto range = partial_range(mst_edges.size(), omp::get_thread_num(),
-                               omp::get_num_threads());
+    auto range = partial_range(mst_edges.size(), mtl_omp::get_thread_num(),
+                               mtl_omp::get_num_threads());
     for (std::size_t i = range.first; i < range.second; ++i) {
       ofs << mst_edges[i] << "\n";
     }

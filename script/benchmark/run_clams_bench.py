@@ -28,10 +28,6 @@ import time
 from pathlib import Path
 from datetime import datetime
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-SCRIPT_DIR = SCRIPT_DIR.parent.parent
-sys.path.insert(0, str(SCRIPT_DIR))
-
 from script.benchmark.bench_utilities import add_cmd, add_msg, add_srun_cmd, set_up_batch_header, add_parameter_msg
 from script.utilities import create_dir, parse_float_list, parse_range
 

@@ -26,22 +26,21 @@ namespace cls = clams;
 
 void show_usage(const char *prog_name) {
   std::cout << "Usage: " << prog_name
-            << " -d <pm_knng_datastore_path> -f <distance_name> [-b "
-               "<bridge_edge_dump_file>]"
+            << " -d <pm_knng_datastore_path> -f <distance_name> -b "
+               "<bridge_edge_output_file>"
             << std::endl;
   std::cout << "  -d <path>: Path to the distributed PM kNNG datastore."
             << std::endl;
   std::cout << "  -f <string>: Distance function name (e.g., l2, cosine)."
             << std::endl;
-  std::cout
-      << "  -b <path>: (Optional) PM datastore path to dump the bridge edges."
-      << std::endl;
+  std::cout << "  -b <path>: Path to text file to write the bridge edges."
+            << std::endl;
 }
 
 bool parse_option(int argc, char *argv[],
                   std::filesystem::path &pm_knng_datastore_path,
                   std::string           &distance_name,
-                  std::string           &bridge_edge_dump_file) {
+                  std::string           &bridge_edge_output_file) {
   int opt;
   pm_knng_datastore_path.clear();
   distance_name.clear();
@@ -55,7 +54,7 @@ bool parse_option(int argc, char *argv[],
         distance_name = optarg;
         break;
       case 'b':
-        bridge_edge_dump_file = optarg;
+        bridge_edge_output_file = optarg;
         break;
       default:
         return false;
@@ -97,9 +96,10 @@ int main(int argc, char **argv) {
 
   std::filesystem::path pm_knng_datastore_path;
   std::string           distance_name;
-  std::string           bridge_edge_dump_file;
-  const bool opt_parse_ret = parse_option(argc, argv, pm_knng_datastore_path,
-                                          distance_name, bridge_edge_dump_file);
+  std::string           bridge_edge_output_file;
+  const bool            opt_parse_ret =
+      parse_option(argc, argv, pm_knng_datastore_path, distance_name,
+                   bridge_edge_output_file);
   if (!opt_parse_ret) {
     if (comm.rank0()) {
       show_usage(argv[0]);
@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
       comm.async(
           new_owner,
           [](const int local_index, cls::id_t p, cls::id_t rep) {
-            auto      point       = pstores[local_index]->find(p);
+            auto point = pstores[local_index]->find(p);
             if (point == pstores[local_index]->end()) {
               std::cerr << "Cannot find point for ID: " << p << std::endl;
               std::abort();
@@ -257,16 +257,16 @@ int main(int argc, char **argv) {
     comm.barrier();
     comm.cout0() << "Connected CCs took (s): " << connect_timer.elapsed()
                  << std::endl;
-    comm.cout0() << "Entier algorithm took (s): " << root_timer.elapsed()
+    comm.cout0() << "Entire algorithm took (s): " << root_timer.elapsed()
                  << std::endl;
 
-    if (!bridge_edge_dump_file.empty()) {
+    if (!bridge_edge_output_file.empty()) {
       std::ofstream ofs;
       if (comm.rank() == 0) {
-        ofs.open(bridge_edge_dump_file);
+        ofs.open(bridge_edge_output_file);
         if (!ofs.is_open()) {
-          std::cerr << "Failed to open bridge edge dump file: "
-                    << bridge_edge_dump_file << std::endl;
+          std::cerr << "Failed to open bridge edge output file: "
+                    << bridge_edge_output_file << std::endl;
           MPI_Abort(comm.get_mpi_comm(), EXIT_FAILURE);
         }
       }
@@ -281,12 +281,12 @@ int main(int argc, char **argv) {
       comm.barrier();
       ofs.close();
       if (comm.rank() == 0 && !ofs) {
-        std::cerr << "Failed to write to bridge edge dump file: "
-                  << bridge_edge_dump_file << std::endl;
+        std::cerr << "Failed to write to bridge edge output file: "
+                  << bridge_edge_output_file << std::endl;
         MPI_Abort(comm.get_mpi_comm(), EXIT_FAILURE);
       }
     }
-    comm.cout0() << "Dumped bridge edges to " << bridge_edge_dump_file
+    comm.cout0() << "Wrote bridge edges to " << bridge_edge_output_file
                  << std::endl;
     comm.cf_barrier();
   }

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../details/data_types.hpp"
+#include "../../details/data_types.hpp"
 
 /*
 Hash function for std::pair

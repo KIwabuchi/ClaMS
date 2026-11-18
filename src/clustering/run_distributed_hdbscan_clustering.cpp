@@ -43,9 +43,10 @@ struct option {
   uint32_t              min_cluster_size{2};
   std::filesystem::path cluster_ids_out_path;
   std::filesystem::path cluster_data_out_path;
-  bool                  write_metall_output{false};
-  bool                  metall_mst{false};
   bool                  verbose{false};
+  bool                  metall_mst{false};
+  bool                  write_metall_output{false};
+  bool                  write_single_file_output{false};
   bool                  read_mst_with_edge_ids{false};
   bool                  output_invalid_clusters_also{false};
 };
@@ -72,8 +73,11 @@ void show_usage(ygm::comm &comm, const char *program_name) {
         << "  -e If specified, read MST file with edge ids included. This "
            "option only works for text file MST input, not Metall input."
         << std::endl
-        << "  -s If specified, write cluster labels to a single Metall "
-           "datastore located at the provided -o path."
+        << "  -d If specified, write cluster labels to a Metall datastore."
+        << std::endl
+        << "  -s If specified, gather cluster labels to a single rank and then "
+           "write to file (either text or Metall datastore if -d) located "
+           "at the provided -o path."
         << std::endl
         << "  -c <path> Path to detailed clustering data output directory. One "
            "csv file will be written per rank."
@@ -90,7 +94,7 @@ std::pair<bool, std::vector<int>> parse_option(int argc, char *argv[],
   bool             show_help = false;
   std::vector<int> unknown_opts;
   int              opt_char;
-  while ((opt_char = getopt(argc, argv, "i:o:m:c:Msevh")) != -1) {
+  while ((opt_char = getopt(argc, argv, "i:o:m:c:Msdevh")) != -1) {
     switch (opt_char) {
       case 'i':
         opt.mst_edges_path = std::filesystem::path(optarg);
@@ -110,8 +114,11 @@ std::pair<bool, std::vector<int>> parse_option(int argc, char *argv[],
       case 'e':
         opt.read_mst_with_edge_ids = true;
         break;
-      case 's':
+      case 'd':
         opt.write_metall_output = true;
+        break;
+      case 's':
+        opt.write_single_file_output = true;
         break;
       case 'v':
         opt.verbose = true;
@@ -180,8 +187,7 @@ int main(int argc, char *argv[]) {
 
   if (opt.metall_mst) {
     if (world.rank() == 0) {
-      spdlog::info("Reading distributed PM MST data from: {}",
-                   opt.mst_edges_path.string());
+      spdlog::info("Reading PM MST data from: {}", opt.mst_edges_path.string());
     }
     mst_edge_vector      = read_pm_mst(opt.mst_edges_path, world);
     local_num_edges_read = mst_edge_vector.size();
@@ -1128,16 +1134,36 @@ int main(int argc, char *argv[]) {
         spdlog::info("Writing cluster labels to Metall datastore at: {}",
                      opt.cluster_ids_out_path.string());
       }
-      write_cluster_labels_single_pm(point_to_cluster_id_map,
-                                     opt.cluster_ids_out_path.string());
-    } else {
-      int num_files = world.size();
-      if (world.rank() == 0) {
-        spdlog::info("Writing {} files containing cluster labels to: {}",
-                     num_files, opt.cluster_ids_out_path.string());
+      if (opt.write_single_file_output) {
+        if (world.rank() == 0) {
+          spdlog::info("Writing single-rank Metall output");
+        }
+        write_cluster_labels_single_pm(point_to_cluster_id_map,
+                                       opt.cluster_ids_out_path.string());
+      } else {
+        if (world.rank() == 0) {
+          spdlog::info("Writing distributed Metall output");
+        }
+        write_cluster_labels_distributed_pm(point_to_cluster_id_map,
+                                            opt.cluster_ids_out_path.string());
       }
-      write_cluster_labels_one_txt_file_per_rank(point_to_cluster_id_map,
-                                                 opt.cluster_ids_out_path);
+    } else {
+      if (opt.write_single_file_output) {
+        if (world.rank() == 0) {
+          spdlog::info("Writing single file containing cluster labels to: {}",
+                       opt.cluster_ids_out_path.string());
+        }
+        write_cluster_labels_rank0_txt_file(point_to_cluster_id_map,
+                                            opt.cluster_ids_out_path);
+      } else {
+        int num_files = world.size();
+        if (world.rank() == 0) {
+          spdlog::info("Writing {} files containing cluster labels to: {}",
+                       num_files, opt.cluster_ids_out_path.string());
+        }
+        write_cluster_labels_one_txt_file_per_rank(point_to_cluster_id_map,
+                                                   opt.cluster_ids_out_path);
+      }
     }
 
     id_t num_points_clustered = 0;

@@ -296,6 +296,73 @@ void sort_and_process_mst_edges_into_maps(
 }
 
 /**
+ * @brief Writes cluster labels to text files, writing all to a single file from
+ * rank 0. This is slower than write_cluster_labels_one_txt_file_per_rank.
+ * Files are in the form point_id \t cluster_label in each row.
+ *
+ * @param point_to_cluster_id_map YGM map of point id -> cluster label.
+ * @param output_path File to write cluster data to.
+ */
+void write_cluster_labels_rank0_txt_file(
+    ygm::container::map<id_t, cluster_id_t> &point_to_cluster_id_map,
+    std::filesystem::path                    output_path) {
+  ygm::comm &comm     = point_to_cluster_id_map.comm();
+  auto       mpi_comm = comm.get_mpi_comm();
+
+  // Get local point ids and cluster labels
+  std::vector<id_t>         point_ids;
+  std::vector<cluster_id_t> cluster_labels;
+  point_ids.reserve(point_to_cluster_id_map.local_size());
+  cluster_labels.reserve(point_to_cluster_id_map.local_size());
+
+  for (const auto &[id, label] : point_to_cluster_id_map) {
+    point_ids.push_back(id);
+    cluster_labels.push_back(label);
+  }
+  comm.barrier();
+
+  std::ofstream label_ofs;
+
+  if (comm.rank() == 0) {
+    std::filesystem::path parent_dir = output_path.parent_path();
+    std::filesystem::create_directories(parent_dir);
+    label_ofs.open(output_path);
+    if (!label_ofs.is_open()) {
+      std::cout << "Error! Unable to open label file: " << output_path.string()
+                << std::endl;
+    } else {
+      // Output our own points and cluster labels
+      label_ofs << "# point_id\tcluster_id\n";
+      for (size_t i = 0; i < point_ids.size(); ++i) {
+        label_ofs << point_ids.at(i) << "\t" << cluster_labels.at(i) << "\n";
+      }
+    }
+
+    // Write edges for all other ranks
+    for (int r = 1; r < comm.size(); ++r) {
+      std::vector<id_t> remote_ids =
+          comm.mpi_recv<std::vector<id_t>>(r, 0, mpi_comm);
+      std::vector<cluster_id_t> remote_labels =
+          comm.mpi_recv<std::vector<cluster_id_t>>(r, 1, mpi_comm);
+      if (label_ofs.is_open()) {
+        for (size_t i = 0; i < remote_ids.size(); ++i) {
+          label_ofs << remote_ids.at(i) << "\t" << remote_labels.at(i) << "\n";
+        }
+      }
+    }
+
+    label_ofs.flush();
+    label_ofs.close();
+  }
+
+  else {
+    comm.mpi_send(point_ids, 0, 0, mpi_comm);
+    comm.mpi_send(cluster_labels, 0, 1, mpi_comm);
+  }
+  comm.barrier();
+}
+
+/**
  * @brief Writes cluster labels to text files, writing one file per rank.
  * Files are in the form point_id \t cluster_label in each row.
  *
@@ -354,7 +421,6 @@ void write_cluster_labels_single_pm(
     point_ids.push_back(id);
     cluster_labels.push_back(label);
   }
-
   const size_t num_points = point_to_cluster_id_map.size();
 
   MPI_Comm mpi_comm = comm.get_mpi_comm();
@@ -390,6 +456,49 @@ void write_cluster_labels_single_pm(
     comm.mpi_send(cluster_labels, 0, 1, mpi_comm);
   }
   comm.barrier();
+}
+
+/**
+ * @brief Writes cluster labels to a distributed Metall datastore from all
+ * ranks. Labels are saved as a vector of pairs (point_id, cluster_label).
+ *
+ * @param point_to_cluster_id_map YGM map of point id -> cluster label.
+ * @param output_path Path (as a string) to output Metall datastore.
+ */
+void write_cluster_labels_distributed_pm(
+    ygm::container::map<id_t, cluster_id_t> &point_to_cluster_id_map,
+    const std::string                       &output_path) {
+  ygm::comm &comm = point_to_cluster_id_map.comm();
+
+  // Get local point ids and cluster labels
+  std::vector<id_t>         point_ids;
+  std::vector<cluster_id_t> cluster_labels;
+  point_ids.reserve(point_to_cluster_id_map.local_size());
+  cluster_labels.reserve(point_to_cluster_id_map.local_size());
+
+  for (const auto &[id, label] : point_to_cluster_id_map) {
+    point_ids.push_back(id);
+    cluster_labels.push_back(label);
+  }
+
+  const size_t num_points = point_to_cluster_id_map.size();
+
+  MPI_Comm mpi_comm = comm.get_mpi_comm();
+
+  metall::utility::metall_mpi_adaptor manager(metall::create_only, output_path,
+                                              mpi_comm, true);
+  auto &local_manager = manager.get_local_manager();
+  auto *cluster_id_table =
+      local_manager.construct<clams::pm_point_to_cluster_id_list_t>(
+          metall::unique_instance)(local_manager.get_allocator());
+  cluster_id_table->reserve(point_ids.size());
+
+  // Write own edges
+  for (size_t i = 0; i < point_ids.size(); ++i) {
+    cluster_id_table->emplace_back(
+        std::make_pair(point_ids.at(i), cluster_labels.at(i)));
+  }
+  comm.cf_barrier();
 }
 
 /**

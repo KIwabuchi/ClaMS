@@ -253,7 +253,7 @@ def run_clustering(job_script, set_cmd, work_dir, amst_approx_bound,
                               f" -m ${{MIN_CLUSTER_SIZE}} "
                               f" -o {cluster_label_dir} "
                               f" -c {cluster_tree_dir} "
-                              f" -s ")
+                              f" -s -d")
     add_srun_cmd(*mpi_sizes['clustering'], hpc_clustering_command, job_script)
     finish_stage(job_script)
 

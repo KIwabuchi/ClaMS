@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include <ygm/detail/collective.hpp>
 #include <ygm/comm.hpp>
 #include <ygm/container/disjoint_set.hpp>
+#include <ygm/detail/collective.hpp>
 #include <ygm/utility/timer.hpp>
 
 #include <cmath>
@@ -137,7 +137,7 @@ class approx_mst_builder {
         return true;
       } else {
         m_compress_timer.reset();
-        if (m_comm.all_reduce_sum(m_edges_since_compress) / m_comm.size() >
+        if (ygm::sum(m_edges_since_compress, m_comm) / m_comm.size() >
             m_compression_threshold) {
           m_dset.all_compress();
         }
@@ -188,8 +188,8 @@ class approx_mst_builder {
 
   void reduce_wgt_limits() {
     m_comm.barrier();
-    m_min_edge_wgt = m_comm.all_reduce_min(m_min_edge_wgt);
-    m_max_edge_wgt = m_comm.all_reduce_max(m_max_edge_wgt);
+    m_min_edge_wgt = ygm::min(m_min_edge_wgt, m_comm);
+    m_max_edge_wgt = ygm::max(m_max_edge_wgt, m_comm);
   }
 
   void calculate_num_buckets() {
@@ -231,9 +231,9 @@ class approx_mst_builder {
 
   ygm::utility::timer m_union_timer;
   ygm::utility::timer m_compress_timer;
-  double     m_last_union_round_time{0.0};
-  double     m_last_compress_time{0.0};
-  bool       m_union_timer_active{false};
+  double              m_last_union_round_time{0.0};
+  double              m_last_compress_time{0.0};
+  bool                m_union_timer_active{false};
 
   result_type               m_local_result;
   ygm::ygm_ptr<result_type> m_local_result_ptr;

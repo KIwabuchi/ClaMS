@@ -23,10 +23,6 @@
 
 namespace clams::clustering {
 
-// Type for writing cluster labels to metal file as a vector of (point id,
-// cluster label) pairs
-using pm_point_to_cluster_id_t = clams::pm_point_to_cluster_id_list_t;
-
 /**
  * @brief Calculate cluster size, stability, and stability traversing up
  * from its child cluster information for a chain once all children have been
@@ -40,7 +36,6 @@ using pm_point_to_cluster_id_t = clams::pm_point_to_cluster_id_list_t;
  * info)
  * @param leaf_cluster_map_ptr Pointer for YGM map of leaf cluster name
  * (supernode) -> leaf cluster info.
- * @param chain_name Name of this chain. Used only for debugging printouts.
  *
  * @return The number of valid clusters found when processing this chain. If a
  * chain cluster has two children with size at least min_cluster_size, we say
@@ -565,11 +560,6 @@ void make_sure_root_chain_bottom_is_valid_and_get_second_child(
                     root_chain_cluster_map_ptr,
         const id_t &cluster_edge_id, root_chain_cluster_info &cluster_info,
         id_t chain_child_size) {
-      // std::cout << "Visiting root chain cluster " << cluster_edge_id
-      //           << " with child size " << cluster_info.child_size
-      //           << " and chain child size = " << chain_child_size
-      //           << std::endl;  // debug
-
       // If this is a valid root chain cluster (both children have min cluster
       // size), set this as the min valid cluster id and stop
       if (chain_child_size >= min_cluster_size &&
@@ -1426,8 +1416,11 @@ void update_root_chain_cluster_info(
  */
 std::pair<id_t, int> correct_root_chain_stability_traversing_up(
     ygm::container::array<std::pair<id_t, root_chain_cluster_info>>
-              &possible_clusters_for_selection_array,
-    ygm::comm &comm, id_t max_cluster_edge_id) {
+        &possible_clusters_for_selection_array,
+    ygm::container::map<id_t, root_chain_cluster_info> &root_chain_cluster_map,
+    id_t                                                max_cluster_edge_id) {
+  ygm::comm &comm = root_chain_cluster_map.comm();
+
   id_t selected_root_chain_cluster_edge_id = 0;
   int  num_correction_iterations           = 0;
   while (num_correction_iterations <
@@ -1486,14 +1479,6 @@ std::pair<id_t, int> correct_root_chain_stability_traversing_up(
              std::pair<id_t, root_chain_cluster_info> &value) {
             stability_correction =
                 value.second.stability - value.second.stability_traversing_up;
-            // std::cout << "Visiting root chain cluster " << value.first
-            //           << " with size = " << value.second.size
-            //           << ", stability = " << value.second.stability
-            //           << " and stability traversing up = "
-            //           << value.second.stability_traversing_up
-            //           << ", giving correction factor = " <<
-            //           stability_correction
-            //           << std::endl;  // debug
             value.second.stability_traversing_up = value.second.stability;
           });
     }
@@ -1520,6 +1505,21 @@ std::pair<id_t, int> correct_root_chain_stability_traversing_up(
     }
     comm.barrier();
   }
+
+  // Update the corrected root chain stability_traversing_up
+  auto update_stability_traversing_up_lambda =
+      []([[maybe_unused]] const id_t &cluster_edge_id,
+         root_chain_cluster_info     &cluster_info,
+         const float                  new_stability_traversing_up) {
+        cluster_info.stability_traversing_up = new_stability_traversing_up;
+      };
+  for (auto it = possible_clusters_for_selection_array.local_begin();
+       it != possible_clusters_for_selection_array.local_end(); ++it) {
+    root_chain_cluster_map.async_visit(
+        it->value.first, update_stability_traversing_up_lambda,
+        it->value.second.stability_traversing_up);
+  }
+  comm.barrier();
 
   return std::make_pair(selected_root_chain_cluster_edge_id,
                         num_correction_iterations);
@@ -1985,214 +1985,6 @@ void assign_points_cluster_ids(
 }
 
 /**
- * @brief Writes cluster labels to text files, writing one file per rank.
- * Files are in the form point_id \t cluster_label in each row.
- *
- * @param point_to_cluster_id_map YGM map of point id -> cluster label.
- * @param output_path File to write cluster data to. Each rank must
- * receive its own file name (e.g., path_to_cluster_labels/rank.txt).
- */
-void write_cluster_labels_one_txt_file_per_rank(
-    ygm::container::map<id_t, cluster_id_t> &point_to_cluster_id_map,
-    std::filesystem::path                    output_path) {
-  ygm::comm &comm = point_to_cluster_id_map.comm();
-
-  int num_files = comm.size();
-  if (comm.rank() == 0) {
-    std::filesystem::create_directories(output_path);
-  }
-  comm.barrier();
-
-  // Output points and cluster labels
-  std::string           label_file_name = std::to_string(comm.rank()) + ".txt";
-  std::filesystem::path label_file_path = output_path / label_file_name;
-  std::ofstream         label_ofs(label_file_path);
-  if (!label_ofs.is_open()) {
-    std::cout << "Error! Unable to open label file: "
-              << label_file_path.string() << std::endl;
-  }
-
-  label_ofs << "# point_id\tcluster_id\n";
-  for (const auto &[point_id, cluster_id] : point_to_cluster_id_map) {
-    label_ofs << point_id << "\t" << cluster_id << "\n";
-  }
-  label_ofs.flush();
-  label_ofs.close();
-  comm.barrier();
-}
-
-/**
- * @brief Writes cluster labels a single-rank Metall datastore. Labels
- * are saved as a vector of pairs (point_id, cluster_label).
- *
- * @param point_to_cluster_id_map YGM map of point id -> cluster label.
- * @param output_path Path (as a string) to output Metall datastore.
- */
-void write_cluster_labels_single_pm(
-    ygm::container::map<id_t, cluster_id_t> &point_to_cluster_id_map,
-    const std::string                       &output_path) {
-  ygm::comm &comm = point_to_cluster_id_map.comm();
-
-  // Get local point ids and cluster labels
-  std::vector<id_t>         point_ids;
-  std::vector<cluster_id_t> cluster_labels;
-  point_ids.reserve(point_to_cluster_id_map.local_size());
-  cluster_labels.reserve(point_to_cluster_id_map.local_size());
-
-  for (const auto &[id, label] : point_to_cluster_id_map) {
-    point_ids.push_back(id);
-    cluster_labels.push_back(label);
-  }
-
-  const size_t num_points = point_to_cluster_id_map.size();
-
-  MPI_Comm mpi_comm = comm.get_mpi_comm();
-
-  if (comm.rank() == 0) {
-    metall::manager manager(metall::create_only, output_path);
-    auto cluster_id_table = manager.construct<pm_point_to_cluster_id_t>(
-        "point_to_cluster_id_list")(manager.get_allocator());
-    cluster_id_table->reserve(num_points);
-
-    // Write own edges
-    for (size_t i = 0; i < point_ids.size(); ++i) {
-      // cluster_id_table->emplace(point_ids.at(i), cluster_labels.at(i));
-      cluster_id_table->emplace_back(
-          std::make_pair(point_ids.at(i), cluster_labels.at(i)));
-    }
-
-    // Write edges for all other ranks
-    for (int r = 1; r < comm.size(); ++r) {
-      std::vector<id_t> remote_ids =
-          comm.mpi_recv<std::vector<id_t>>(r, 0, mpi_comm);
-      std::vector<cluster_id_t> remote_labels =
-          comm.mpi_recv<std::vector<cluster_id_t>>(r, 1, mpi_comm);
-      for (size_t i = 0; i < remote_ids.size(); ++i) {
-        cluster_id_table->emplace_back(
-            std::make_pair(remote_ids.at(i), remote_labels.at(i)));
-      }
-    }
-
-  } else {
-    comm.mpi_send(point_ids, 0, 0, mpi_comm);
-    comm.mpi_send(cluster_labels, 0, 1, mpi_comm);
-  }
-  comm.barrier();
-}
-
-/**
- * @brief Writes information of all clusters to file, disregarding
- * min_cluster_size.
- *
- * @param cluster_file_path File to write cluster data to. Each rank must
- * receive its own file name (e.g., path_to_cluster_data/rank.csv).
- * @param root_chain_min_edge_id The smallest cluster edge id in the root
- * chain. We write the second root chain child info to that cluster.
- * @param root_chain_second_child Info of the second child for the bottom root
- * chain cluster.
- * @param root_chain_cluster_map YGM map of root chain cluster edge id -> root
- * chain cluster info.
- * @param chain_map YGM map of chain name -> (cluster map, chain info).
- * @param leaf_cluster_map YGM map of leaf cluster name -> leaf cluster info.
- */
-void write_all_clusters_to_file_including_invalid_clusters(
-    std::filesystem::path cluster_file_path, supernode_t root_chain_supernode,
-    id_t                                                root_chain_min_edge_id,
-    extra_child_cluster_info                           &root_chain_second_child,
-    ygm::container::map<id_t, root_chain_cluster_info> &root_chain_cluster_map,
-    ygm::container::map<supernode_t,
-                        std::pair<std::map<id_t, full_cluster_info>,
-                                  full_chain_info>>    &chain_map,
-    ygm::container::map<supernode_t, full_leaf_cluster_info>
-        &leaf_cluster_map) {
-  ygm::comm &comm = chain_map.comm();
-
-  std::ofstream ofs(cluster_file_path);
-
-  // Output cluster data
-  // Header
-  ofs << "cluster_name,size,stability,stability_traversing_up,"
-         "selected,cluster_id,parent_cluster_name,birth_distance,"
-         "min_edge_distance,non_chain_child1,non_chain_child2,valid_cluster"
-      << "\n";
-
-  // Write root chain clusters
-  for (auto &[cluster_edge_id, cluster_info] : root_chain_cluster_map) {
-    std::stringstream ss;
-    ss << "\"" << std::make_pair(root_chain_supernode, cluster_edge_id) << "\","
-       << cluster_info.size << "," << cluster_info.stability << ","
-       << cluster_info.stability_traversing_up << "," << cluster_info.selected
-       << "," << cluster_info.cluster_id << ","
-       << "\""
-       << std::make_pair(root_chain_supernode, cluster_info.parent_edge_id)
-       << "\""
-       << "," << 1.0 / cluster_info.lambda_birth << ","
-       << 1.0 / cluster_info.lambda_min_edge << "," << "\""
-       << cluster_info.child << "\"" << ",";
-    if (cluster_edge_id == root_chain_min_edge_id) {
-      ss << "\"" << root_chain_second_child.name << "\"";
-    }
-    ss << ",1";
-    ofs << ss.str() << "\n";
-  }
-
-  // Write chain clusters
-  for (auto &[chain_name, chain] : chain_map) {
-    for (auto it = chain.first.begin(); it != chain.first.end(); ++it) {
-      id_t              cluster_edge_id = it->first;
-      full_cluster_info cluster_info    = it->second;
-
-      if (cluster_info.valid_cluster) {
-        std::stringstream ss;
-
-        std::pair<supernode_t, id_t> parent_name;
-        auto                         next_it = std::next(it);
-        if (next_it == chain.first.end()) {
-          parent_name = std::make_pair(chain.second.parent_chain,
-                                       chain.second.parent_edge_id);
-        } else {
-          parent_name = std::make_pair(chain_name, next_it->first);
-        }
-
-        ss << "\"" << std::make_pair(chain_name, cluster_edge_id) << "\","
-           << cluster_info.size << "," << cluster_info.stability << ","
-           << cluster_info.stability_traversing_up << ","
-           << cluster_info.selected << "," << cluster_info.cluster_id << ","
-           << "\"" << parent_name << "\""
-           << "," << cluster_info.birth_distance << ","
-           << cluster_info.min_edge.second << "," << "\"" << cluster_info.child
-           << "\"" << ",";
-        if (it == chain.first.begin()) {
-          ss << "\"" << chain.second.children[1] << "\"";
-        }
-        ss << "," << cluster_info.valid_cluster;
-        ofs << ss.str() << "\n";
-      }
-    }
-  }
-
-  // Write leaf clusters
-  for (auto &[cluster_name, cluster_info] : leaf_cluster_map) {
-    if (cluster_info.valid_cluster) {
-      std::stringstream ss;
-      ss << "\"" << std::make_pair(cluster_name, 0) << "\"" << ","
-         << cluster_info.edges.size() + 1 << "," << cluster_info.stability
-         << "," << cluster_info.stability << "," << cluster_info.selected << ","
-         << cluster_info.cluster_id << ","
-         << "\""
-         << std::make_pair(cluster_info.parent_chain,
-                           cluster_info.parent_edge_id)
-         << "\""
-         << "," << cluster_info.birth_distance << ",,,,"
-         << cluster_info.valid_cluster;
-      ofs << ss.str() << "\n";
-    }
-  }
-
-  comm.barrier();
-}
-
-/**
  * @brief Go through all clusters and get valid clusters. Store valid clusters
  * and their information in the valid_clusters_map. Erase invalid clusters
  * from root_chain_cluster_map, chain_map, and leaf_cluster_map.
@@ -2538,67 +2330,6 @@ void get_valid_cluster_parent_child_relations(
     chain_map.for_all(visit_chains_this_round);
     comm.barrier();
   }
-}
-
-/**
- * @brief Writes information on valid clusters to file.
- *
- * @param cluster_file_path File to write cluster data to. Each rank must
- * receive its own file name (e.g., path_to_cluster_data/rank.csv).
- * @param valid_cluster_map YGM map of valid clusters mapping cluster name ->
- * valid cluster info.
- *
- * @return The sum of sizes of all selected clusters.
- * This is a sanity check against the number of points clustered.
- */
-id_t write_valid_clusters_to_file(
-    std::filesystem::path cluster_file_path,
-    ygm::container::map<cluster_name_t, full_valid_cluster_info>
-        &valid_cluster_map) {
-  ygm::comm &comm = valid_cluster_map.comm();
-
-  id_t num_points_clustered = 0;
-
-  // Create output file stream
-  std::ofstream ofs(cluster_file_path);
-  if (!ofs.is_open()) {
-    std::cout << "Unable to open cluster info file: "
-              << cluster_file_path.string();
-  }
-
-  // Write header
-  ofs << "cluster_name,size,stability,stability_traversing_up,"
-         "selected,cluster_id,birth_distance,parent,child1,child2,num_points_"
-         "added"
-      << "\n";
-
-  // Write valid clusters
-  for (auto &[cluster_name, cluster_info] : valid_cluster_map) {
-    std::stringstream ss;
-    ss << "\"" << cluster_name << "\""
-       << "," << cluster_info.size << "," << cluster_info.stability << ","
-       << cluster_info.stability_traversing_up << "," << cluster_info.selected
-       << "," << cluster_info.cluster_id << "," << cluster_info.birth_distance
-       << ","
-       << "\"" << cluster_info.parent << "\""
-       << ","
-       << "\"" << cluster_info.children[0] << "\""
-       << ","
-       << "\"" << cluster_info.children[1] << "\""
-       << "," << cluster_info.num_points_added;
-    ofs << ss.str() << "\n";
-
-    if (cluster_info.selected) {
-      num_points_clustered += cluster_info.size;
-    }
-  }
-  ofs.flush();
-  ofs.close();
-  comm.barrier();
-
-  id_t total_num_points_clustered = ygm::sum(num_points_clustered, comm);
-
-  return total_num_points_clustered;
 }
 
 }  // namespace clams::clustering
